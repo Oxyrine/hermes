@@ -35,7 +35,7 @@ def run(conn: psycopg.Connection) -> dict:
         role: one("INSERT INTO app_user (tenant_id, email, role) VALUES (%s,%s,%s) RETURNING id",
                   tenant, f"{name}@lender-a.example", role)
         for name, role in (("ops", "lender_ops"), ("approver", "lender_approver"),
-                           ("agent", "agent"))
+                           ("agent", "agent"), ("supplier", "supplier"))
     }
     for d, rate, url in BANK_RATES:
         conn.execute("INSERT INTO bank_rate (effective_from, rate, source_url, entered_by, "

@@ -17,7 +17,8 @@ class ScriptedAgent:
     def handle(self, event: dict) -> None:
         # ponytail: one handler so far; each later ticket adds its row of the event table
         {"deadline.passed": self.deadline_passed,
-         "payment.received": self.payment_received}[event["kind"]](event)
+         "payment.received": self.payment_received,
+         "offer.expired": self.offer_expired}[event["kind"]](event)
 
     def deadline_passed(self, event: dict) -> None:
         """Re-run interest and collateral (the invoice read runs and stores both engines as of
@@ -46,3 +47,9 @@ class ScriptedAgent:
                 raise
             return
         self.call("POST", f"/v1/invoices/{inv}/waterfall", json={"as_of": as_of})
+
+    def offer_expired(self, event: dict) -> None:
+        """The offer lapsed or was refused: draft the dispute pack for the supplier to release.
+        The agent never files; it cannot reach the portal."""
+        self.call("POST", f"/v1/invoices/{event['invoice_id']}/actions",
+                  json={"kind": "odr_pack", "as_of": event["payload"]["as_of"]})
