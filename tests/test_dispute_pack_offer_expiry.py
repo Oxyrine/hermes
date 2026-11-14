@@ -97,7 +97,7 @@ def test_expiry_proposes_a_dispute_pack_whose_figures_equal_the_stored_engine_ru
 
 def test_only_the_supplier_releases_the_pack_and_approval_records_who_and_when(
         client, db, expired):
-    h, inv, _supplier, pack = expired
+    h, inv, supplier, pack = expired
     approver = login(client, "approver@lender-a.example")
     assert client.post(f"/v1/actions/{pack['id']}/approve", headers=approver).status_code == 403
     assert client.post(f"/v1/actions/{pack['id']}/approve", headers=h).status_code == 403
@@ -122,7 +122,7 @@ def test_supplier_cannot_approve_a_settlement_offer(client, dsn):
 
 @pytest.fixture
 def ready(client, expired):
-    h, inv, _supplier, pack = expired
+    h, inv, supplier, pack = expired
     assert client.post(f"/v1/actions/{pack['id']}/approve", headers=supplier).status_code == 200
     return h, inv
 
