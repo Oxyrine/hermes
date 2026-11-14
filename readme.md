@@ -18,10 +18,22 @@ createuser hermes -P         # password: hermes-local-only
 createdb -O hermes hermes
 ```
 
-`DATABASE_URL` in `.env` already matches. CI needs no database, model call or API key.
+`DATABASE_URL` in `.env` already matches. CI needs no model call or API key.
+
+**Tests need no database setup.** Without `DATABASE_URL`, `uv run pytest` starts an embedded
+PostgreSQL 16 (dev dependency `pixeltable-pgserver`); with it set, tests use that server and
+wipe its `public` schema, so point it at a scratch database.
+
+## Run the first slice
+
+```
+uv run python -m hermes.ledger.seed                    # reset and seed DATABASE_URL (dev only)
+HERMES_ENV=development uv run uvicorn hermes.api:app   # API on :8000, /dev/login enabled
+cd web && npm install && npm run dev                   # invoice page on :3000
+```
 
 ## Layout
 
 - `src/hermes/` engines, API, adapters, agent, synthetic data (one Python project)
-- `web/` Next.js app (placeholder)
+- `web/` Next.js app (invoice page)
 - `docs/` product spec, prototype spec and tickets, ADRs

@@ -4,12 +4,20 @@ version = "0.0.0"
 description = "Evidence, pricing and servicing layer between MSME suppliers and regulated lenders"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.162.7",
     "fpdf2>=2.9.0",
+    "psycopg[binary]>=3.3.9",
+    "pyjwt>=2.15.1",
     "reportlab>=5.1.0",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = [
+    "httpx>=0.28.1",
+    "pixeltable-pgserver>=0.7.2",
+    "pytest>=8",
+    "ruff>=0.6",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -24,3 +32,6 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/hermes/api.py" = ["B008"]  # FastAPI's Depends()/Body() defaults
