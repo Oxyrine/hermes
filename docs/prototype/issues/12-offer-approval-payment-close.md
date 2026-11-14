@@ -4,7 +4,7 @@
 
 **Blocked by:** 08, 11
 
-**Status:** done
+**Status:** resolved
 
 - [x] When an invoice becomes overdue the scripted runner proposes a settlement-offer action whose draft is the template filled from engine output and which cites the engine runs it relies on
 - [x] Nothing is marked sent without an approved action; approval records the named user and time
