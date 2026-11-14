@@ -40,7 +40,7 @@ def pending(client, who):
 
 def test_overdue_proposes_one_offer_that_cites_its_engine_runs_and_sends_nothing(client, db, overdue):
     h, inv = overdue
-    approver = login(client, "approver@lender-a.example")
+    approver = login(client, "supplier@sundaram.example")
     (a,) = pending(client, approver)
     assert a["invoice_id"] == inv and a["kind"] == "settlement_offer" and a["status"] == "proposed"
     d = a["draft"]
@@ -61,7 +61,7 @@ def test_overdue_proposes_one_offer_that_cites_its_engine_runs_and_sends_nothing
 def test_approval_records_the_named_user_and_moves_the_invoice_to_settlement_offered(
         client, db, overdue):
     h, inv = overdue
-    approver = login(client, "approver@lender-a.example")
+    approver = login(client, "supplier@sundaram.example")
     (a,) = pending(client, approver)
     assert client.post(f"/v1/actions/{a['id']}/approve", headers=h).status_code == 403
     r = client.post(f"/v1/actions/{a['id']}/approve", headers=approver)
@@ -69,7 +69,7 @@ def test_approval_records_the_named_user_and_moves_the_invoice_to_settlement_off
     assert r.json()["status"] == "approved" and r.json()["approved_at"]
     who = db.execute("SELECT u.email FROM action_request a JOIN app_user u ON u.id=a.approved_by"
                      ).fetchone()
-    assert who == ("approver@lender-a.example",)
+    assert who == ("supplier@sundaram.example",)
     assert state(db, inv) == "settlement_offered"
     assert pending(client, approver) == []
     assert client.post(f"/v1/actions/{a['id']}/approve", headers=approver).status_code == 409
@@ -77,7 +77,7 @@ def test_approval_records_the_named_user_and_moves_the_invoice_to_settlement_off
 
 def test_rejection_leaves_the_invoice_overdue(client, db, overdue):
     _h, inv = overdue
-    approver = login(client, "approver@lender-a.example")
+    approver = login(client, "supplier@sundaram.example")
     (a,) = pending(client, approver)
     r = client.post(f"/v1/actions/{a['id']}/reject", headers=approver, json={"reason": "too low"})
     assert r.status_code == 200 and r.json()["status"] == "rejected"
@@ -88,7 +88,7 @@ def test_rejection_leaves_the_invoice_overdue(client, db, overdue):
 def test_late_buyer_story_end_to_end(client, db, dsn, overdue):
     """Advance, clock, tick, approval, payment, waterfall, lender confirmation; API calls only."""
     h, inv = overdue
-    approver = login(client, "approver@lender-a.example")
+    approver = login(client, "supplier@sundaram.example")
     (a,) = pending(client, approver)
     assert client.post(f"/v1/actions/{a['id']}/approve", headers=approver).status_code == 200
     offer = a["draft"]["offer"]
@@ -97,7 +97,7 @@ def test_late_buyer_story_end_to_end(client, db, dsn, overdue):
     short = client.post("/dev/payments", headers=h, json={
         "invoice_id": inv, "amount": "100000.00", "utr": "UTR-1"})
     assert short.status_code == 200, short.text
-    assert drain(dsn, SECRET, client) == 1
+    assert drain(dsn, SECRET, client) == 2  # the approval and the payment
     assert state(db, inv) == "settlement_offered"  # not covered yet: no waterfall
     assert client.get(f"/v1/invoices/{inv}", headers=h).json()["waterfall"] is None
 

@@ -25,7 +25,8 @@ async function headersFor(email) {
 async function decide(formData) {
   "use server";
   const verb = formData.get("verb") === "approve" ? "approve" : "reject";
-  const headers = await headersFor(process.env.HERMES_APPROVER_EMAIL || "approver@lender-a.example");
+  // the supplier approves offers and releases dispute packs
+  const headers = await headersFor(process.env.HERMES_SUPPLIER_EMAIL || "supplier@sundaram.example");
   await api(`/v1/actions/${encodeURIComponent(formData.get("id"))}/${verb}`, {
     method: "POST",
     headers: { ...headers, "content-type": "application/json" },
@@ -37,14 +38,16 @@ async function decide(formData) {
 async function load() {
   const headers = await headersFor(process.env.HERMES_DEV_EMAIL || "ops@lender-a.example");
   const [first] = await api("/v1/invoices", { headers });
-  const approver = await headersFor(process.env.HERMES_APPROVER_EMAIL || "approver@lender-a.example");
-  const [inv, series, timeline, actions] = await Promise.all([
+  const supplier = await headersFor(process.env.HERMES_SUPPLIER_EMAIL || "supplier@sundaram.example");
+  const [inv, series, timeline, actions, filed] = await Promise.all([
     api(`/v1/invoices/${first.id}`, { headers }),
     api(`/v1/invoices/${first.id}/collateral-series`, { headers }),
     api(`/v1/invoices/${first.id}/timeline`, { headers }),
-    api("/v1/actions?status=proposed", { headers: approver }),
+    api("/v1/actions?status=proposed", { headers: supplier }),
+    api("/v1/actions?status=approved", { headers: supplier }),
   ]);
-  return { ...inv, series, timeline, actions };
+  const odr = (a) => a.kind === "odr_pack";
+  return { ...inv, series, timeline, actions, released: filed.filter(odr) };
 }
 
 // Two lines (claim value, exposure) from API series. Number() only positions points on the
@@ -71,6 +74,10 @@ function Chart({ series }) {
     </figure>
   );
 }
+
+const PackLinks = ({ id }) => (
+  <>Download: <a href={`/pack/${id}/pdf`}>PDF</a> &middot; <a href={`/pack/${id}/json`}>JSON</a></>
+);
 
 const Row = ({ k, v }) => (
   <tr>
@@ -120,13 +127,26 @@ export default async function Page() {
       {inv.actions.length === 0 ? <p>Nothing awaiting approval.</p> : inv.actions.map((a) => (
         <form key={a.id} action={decide} style={{ border: "1px solid #ccc", padding: 12, marginBottom: 12 }}>
           <input type="hidden" name="id" value={a.id} />
+          <input type="hidden" name="kind" value={a.kind} />
+          {a.kind === "odr_pack" ? (
+            <>
+              <p><strong>Dispute pack</strong> &middot; the supplier approves its release; a person files it
+                on the portal (Hermes submits nothing). <PackLinks id={a.id} /></p>
+              <p>Relies on: {a.draft.cites.map((c) => `${c.engine} ${c.rule_version}`).join(", ")}</p>
+            </>
+          ) : (<>
           <p><strong>{a.kind}</strong> &middot; offer Rs {a.draft.offer} &middot; floor Rs {a.draft.floor}
             {a.draft.needs_lender_consent ? " (needs lender consent)" : ""}</p>
           <pre style={{ whiteSpace: "pre-wrap" }}>{a.draft.letter}</pre>
           <p>Relies on: {a.draft.cites.map((c) => `${c.engine} ${c.rule_version}`).join(", ")}</p>
+          </>)}
           <button name="verb" value="approve">Approve</button>{" "}
           <button name="verb" value="reject">Reject</button>
         </form>
+      ))}
+
+      {inv.released.map((a) => (
+        <p key={a.id}>Dispute pack released {a.approved_at}. <PackLinks id={a.id} /></p>
       ))}
 
       {inv.waterfall && (

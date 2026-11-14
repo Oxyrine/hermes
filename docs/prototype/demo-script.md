@@ -12,7 +12,7 @@ story from a fresh reset without the browser; its output is stored in `walkthrou
 3. (0:40) Move time: `PUT /dev/clock {"date":"2026-11-14"}`, `POST /dev/tick {}`, then run
    `uv run python -m hermes.dispatcher`. The agent re-runs interest and collateral, marks the
    invoice overdue and proposes a settlement offer. Reload: the chart shows claim value above exposure.
-4. (1:00) Approval list: read the draft letter and the engine runs it cites; press Approve (the
+4. (1:00) Approval list: read the draft letter and the engine runs it cites; press Approve as the supplier (the
    named approver and time are recorded). The invoice is settlement offered. Reject would leave it overdue.
 5. (1:20) Buyer pays: `POST /dev/payments` as ops with the offer amount, then run the dispatcher.
    The invoice is paid and the page shows the waterfall: lender exposure first, the rest, all

@@ -1,7 +1,7 @@
 """The two-minute late-buyer demo, driven through the API like the test. `python -m hermes.demo`
 resets and seeds DATABASE_URL, then plays the story against a running API (HERMES_API_URL, started
 with HERMES_ENV=development), printing each step. The approval is the one human step; here the
-seeded approver is logged in and approves, as the presenter would on the page."""
+seeded supplier is logged in and approves, as the presenter would on the page."""
 
 import os
 
@@ -19,14 +19,14 @@ def play(dsn: str, secret: str, http, say=print) -> None:
     say("1. Reset and seeded: one verified invoice, Rs 1000000.00, due 2026-09-15.")
 
     def login(who):
-        token = http.post("/dev/login", json={"email": f"{who}@lender-a.example"}).json()["token"]
+        token = http.post("/dev/login", json={"email": who}).json()["token"]
         return {"Authorization": f"Bearer {token}"}
 
     def ok(r):
         assert r.status_code == 200, r.text
         return r.json()
 
-    ops, approver = login("ops"), login("approver")
+    ops, approver = login("ops@lender-a.example"), login("supplier@sundaram.example")
     inv = ok(http.get("/v1/invoices", headers=ops))[0]["id"]
     ok(http.post(f"/v1/invoices/{inv}/advances", headers=ops,
                  json={"principal": "700000.00", "disbursed_on": "2026-09-01"}))

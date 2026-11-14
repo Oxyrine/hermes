@@ -49,7 +49,7 @@ def queue(client, h):
 
 
 def test_each_role_sees_only_its_items_sorted_by_deadline(client, who, inv):
-    late = propose(client, who, inv, "odr_pack", deadline="2026-12-20")
+    late = propose(client, who, inv, "buyer_note", deadline="2026-12-20")
     soon = propose(client, who, inv, "doc_link", deadline="2026-12-01")
     terms = propose(client, who, inv, "contract_terms")  # no deadline: falls back to due date
     obj = propose(client, who, inv, "objection", deadline="2026-12-10")
@@ -64,7 +64,7 @@ def post(client, h, a, verb, **body):
 
 
 def test_edit_is_stored_as_a_difference_then_approval_records_who_when_and_what(client, db, who, inv):
-    a = propose(client, who, inv, "odr_pack")
+    a = propose(client, who, inv, "buyer_note")
     r = post(client, who["supplier"], a, "edit", changes={"letter": "Hello, revised"})
     assert r.status_code == 200, r.text
     assert r.json()["edit_difference"] == {"letter": {"from": "Hello", "to": "Hello, revised"}}
@@ -82,7 +82,7 @@ def test_edit_is_stored_as_a_difference_then_approval_records_who_when_and_what(
 
 
 def test_rejection_needs_a_reason(client, who, inv):
-    a = propose(client, who, inv, "odr_pack")
+    a = propose(client, who, inv, "buyer_note")
     assert post(client, who["supplier"], a, "reject").status_code == 422
     assert post(client, who["supplier"], a, "reject", reason="  ").status_code == 422
     r = post(client, who["supplier"], a, "reject", reason="wrong buyer")
@@ -91,7 +91,7 @@ def test_rejection_needs_a_reason(client, who, inv):
 
 
 def test_agent_and_wrong_roles_cannot_decide(client, who, inv):
-    a = propose(client, who, inv, "odr_pack")  # supplier only
+    a = propose(client, who, inv, "buyer_note")  # supplier only
     t = propose(client, who, inv, "contract_terms")  # hermes_ops only
     for verb, body in (("approve", {}), ("reject", {"reason": "x"}), ("edit", {"changes": {"letter": "x"}})):
         for role in ("agent", "ops", "lender"):
@@ -124,7 +124,7 @@ def test_an_edit_clears_earlier_approvals(client, who, inv):
 
 
 def test_supplier_cannot_touch_another_suppliers_item(client, db, who, inv):
-    a = propose(client, who, inv, "odr_pack")
+    a = propose(client, who, inv, "buyer_note")
     db.execute("INSERT INTO app_user (tenant_id, email, role, supplier_id) SELECT tenant_id, "
                "'s@other.example','supplier',gen_random_uuid() FROM app_user LIMIT 1")
     other = login(client, "s@other.example")

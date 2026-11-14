@@ -4,15 +4,15 @@
 
 **Blocked by:** 12
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A settlement-offer action carries an expiry; the tick emits an offer-expired event when it passes
-- [ ] On expiry or refusal, and with the supplier's consent to escalate, the invoice moves to dispute-ready
-- [ ] A dispute-pack action is proposed with the PDF and JSON from the settlement engine attached
-- [ ] The pack's computation sheet cites the stored engine runs and their rule versions; every figure equals those runs
-- [ ] The supplier approves release; approval records who and when
-- [ ] The invoice moves to filed only when a person enters the case number
-- [ ] Recording an award requires an uploaded award document
-- [ ] There is no code path that contacts the dispute portal
-- [ ] The pack can be downloaded from the approval item and the invoice page
-- [ ] Scenario 5 passes: offer expires, pack generated, supplier approves, case number entered
+- [x] A settlement-offer action carries an expiry; the tick emits an offer-expired event when it passes
+- [x] On expiry or refusal, and with the supplier's consent to escalate, the invoice moves to dispute-ready
+- [x] A dispute-pack action is proposed with the PDF and JSON from the settlement engine attached
+- [x] The pack's computation sheet cites the stored engine runs and their rule versions; every figure equals those runs
+- [x] The supplier approves release; approval records who and when
+- [x] The invoice moves to filed only when a person enters the case number
+- [x] Recording an award requires an uploaded award document
+- [x] There is no code path that contacts the dispute portal
+- [x] The pack can be downloaded from the approval item and the invoice page
+- [x] Scenario 5 passes: offer expires, pack generated, supplier approves, case number entered
