@@ -20,7 +20,8 @@ class ScriptedAgent:
          "payment.received": self.payment_received,
          "offer.expired": self.offer_expired,
          "bank_rate.changed": self.bank_rate_changed,
-         "action.approved": lambda e: None}[event["kind"]](event)  # published for later tickets to act on
+         "action.approved": lambda e: None,
+         "document.ingested": lambda e: None}[event["kind"]](event)  # published for later tickets (extraction) to act on
 
     def deadline_passed(self, event: dict) -> None:
         """Re-run interest and collateral (the invoice read runs and stores both engines as of

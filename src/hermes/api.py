@@ -202,6 +202,29 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
         require(who, "supplier", "lender_ops")
         return refuse(onboarding.create_invoice, c, who["tenant"], body, mine(who))
 
+    @app.post("/v1/documents")
+    async def upload(request: Request, filename: str, doc_type: str, invoice_id: str | None = None,
+                     supplier_id: str | None = None, who=Depends(caller), c=Depends(conn)):
+        """Raw file bytes as the body, its type in Content-Type; metadata in the query."""
+        require(who, "supplier", "lender_ops")
+        if int(request.headers.get("content-length") or 0) > onboarding.MAX_UPLOAD:
+            raise HTTPException(413, "the file is larger than the 5 MB limit")
+        return refuse(onboarding.upload_document, c, who["tenant"], filename,
+                      request.headers.get("content-type"), await request.body(), doc_type,
+                      invoice_id, supplier_id, mine(who))
+
+    @app.get("/v1/documents/{document_id}/content")
+    def download(document_id: str, who=Depends(caller), c=Depends(conn)):
+        """Never public: an authorised caller, scoped to their own supplier, and the read is audited."""
+        require(who, "supplier", "lender_ops", "lender_approver", "hermes_ops")
+        _, kind, data = refuse(onboarding.fetch_document, c, who["tenant"], document_id, mine(who))
+        c.execute("INSERT INTO audit_log (tenant_id, actor, action, object_type, object_id) "
+                  "VALUES (%s,%s,'read:document','document',%s)",
+                  (who["tenant"], f"{who['role']}:{who['sub']}", document_id))
+        return Response(data, media_type=kind, headers={
+            "content-disposition": 'attachment; filename="document"',
+            "x-content-type-options": "nosniff", **NOINDEX})
+
     @app.post("/v1/invoices/{invoice_id}/waterfall")
     def waterfall(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
         require(who, "agent", "hermes_ops")

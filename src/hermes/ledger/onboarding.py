@@ -1,6 +1,8 @@
 """Onboarding, consent, invoice creation and document upload. Every input is validated here and
 refused with a message a person can act on (ValueError -> 422, states.Refused -> 409)."""
 
+import hashlib
+import json
 import re
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -168,3 +170,50 @@ def create_invoice(conn, tenant_id, body: dict, only_supplier=None) -> dict:
     except UniqueViolation:
         raise states.Refused(f"invoice {no} already exists for this supplier") from None
     return {"id": iid, "invoice_no": no, "state": "ingested"}
+
+
+def upload_document(conn, tenant_id, filename, content_type, data: bytes, doc_type, invoice_id=None,
+                    supplier_id=None, only_supplier=None) -> dict:
+    """Store an uploaded PDF or image unchanged (bytes, SHA-256) against an invoice or, for a
+    certificate or contract, the supplier alone; then publish document.ingested."""
+    kind = (content_type or "").split(";")[0].strip().lower()
+    if kind not in SIGNATURES:
+        raise ValueError("only PDF, PNG, JPEG or WebP files are accepted")
+    if not data or len(data) > MAX_UPLOAD:
+        raise ValueError(f"the file must be between 1 byte and {MAX_UPLOAD // 1024 // 1024} MB")
+    if not data.startswith(SIGNATURES[kind]) or (kind == "image/webp" and data[8:12] != b"WEBP"):
+        raise ValueError(f"the file content is not really {kind}")
+    name = _text({"filename": filename}, "filename", "filename", 255)
+    _choice(doc_type, DOC_TYPES, "document type")
+    if invoice_id:
+        iid = _uuid(invoice_id, "invoice")
+        row = conn.execute("SELECT supplier_id::text FROM invoice WHERE id=%s AND tenant_id=%s",
+                           (iid, tenant_id)).fetchone()
+        if not row or (only_supplier is not None and only_supplier != row[0]):
+            raise NotFound("invoice")
+        sid = row[0]
+    else:
+        if doc_type not in SUPPLIER_DOC_TYPES:
+            raise ValueError("a document without an invoice must be a certificate or contract")
+        iid, sid = None, _own_supplier(conn, tenant_id, only_supplier or supplier_id, only_supplier)
+    digest = hashlib.sha256(data).hexdigest()
+    did = conn.execute(
+        "INSERT INTO document (tenant_id, invoice_id, supplier_id, doc_type, filename, content_type, "
+        "size_bytes, content, sha256) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id::text",
+        (tenant_id, iid, sid, doc_type, name, kind, len(data), data, digest)).fetchone()[0]
+    conn.execute("INSERT INTO event_queue (tenant_id, invoice_id, kind, payload) "
+                 "VALUES (%s,%s,'document.ingested',%s::jsonb)",
+                 (tenant_id, iid, json.dumps({"document_id": did, "doc_type": doc_type,
+                                              "supplier_id": sid})))
+    return {"id": did, "doc_type": doc_type, "invoice_id": iid, "supplier_id": sid,
+            "sha256": digest, "size_bytes": len(data)}
+
+
+def fetch_document(conn, tenant_id, document_id, only_supplier=None) -> tuple:
+    """(filename, content type, bytes) of a stored upload; a supplier reaches only their own."""
+    row = conn.execute("SELECT filename, content_type, content, supplier_id::text FROM document "
+                       "WHERE id=%s AND tenant_id=%s AND content IS NOT NULL",
+                       (_uuid(document_id, "document"), tenant_id)).fetchone()
+    if not row or (only_supplier is not None and only_supplier != row[3]):
+        raise NotFound("document")
+    return row[0], row[1], bytes(row[2])
