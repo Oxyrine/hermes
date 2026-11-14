@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0",
+  "reasons": [
+    "Section 16 claim: compound interest with monthly rests at three times the bank rate, plus simple interest on a 365-day basis for the part month.",
+    "Awaiting legal review: the bank rate is re-read at each rest (the rate in force on the rest's start date applies to that month).",
+    "Awaiting legal review: stub convention, simple interest for the part month at three times the rate in force at the last rest.",
+    "Awaiting legal review: principal is the invoice total including GST (v0).",
+    "Awaiting legal review: a part payment clears accrued interest first, then balance."
+  ]
+}
