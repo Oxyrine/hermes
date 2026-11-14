@@ -73,7 +73,15 @@ def _section(env: dict, **fields) -> dict:
     return {**fields, "rule_version": env["rule_version"], "reasons": env["reasons"]}
 
 
-def invoice_view(conn, tenant_id, invoice_id, as_of: date) -> dict:
+def _waterfall_row(cur, tenant_id, invoice_id):
+    return cur.execute(
+        "SELECT as_of::text, receipts::text, lender_exposure::text, costs::text, supplier::text, "
+        "rule_version, input_hash FROM waterfall WHERE invoice_id=%s AND tenant_id=%s",
+        (invoice_id, tenant_id)).fetchone()
+
+
+def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = None) -> dict:
+    """With env, the engine envelopes and collateral inputs used are also stored in it by name."""
     try:
         invoice_id = str(UUID(str(invoice_id)))
     except ValueError:
@@ -101,8 +109,11 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date) -> dict:
     adv = cur.execute("SELECT principal, disbursed_on FROM advance WHERE invoice_id=%s AND "
                       "tenant_id=%s ORDER BY disbursed_on LIMIT 1", (invoice_id, tenant_id)).fetchone()
 
+    env = {} if env is None else env
+
     def run(engine, inputs):
-        return run_engine(conn, tenant_id, invoice_id, engine, inputs, reuse=True)
+        env[engine] = run_engine(conn, tenant_id, invoice_id, engine, inputs, reuse=True)
+        return env[engine]
 
     delivery = grn["extracted"]["delivery_date"]
     elig = run("eligibility", {
@@ -116,7 +127,7 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date) -> dict:
 
     out = {
         "id": str(invoice_id), "invoice_no": inv["invoice_no"], "total": str(inv["total"]),
-        "state": inv["state"],
+        "state": inv["state"], "waterfall": _waterfall_row(cur, tenant_id, invoice_id),
         "eligibility": _section(elig, status=elig["result"]["status"],
                                 detail=elig["result"]["reasons"]),
         "deadline": _section(dl, **dl["result"]),
@@ -145,6 +156,7 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date) -> dict:
     }
     if adv:
         col_in |= {"advance": str(adv["principal"]), "funded_on": adv["disbursed_on"].isoformat()}
+    env["collateral_inputs"] = col_in
     col = run("collateral", col_in)
     cr = col["result"]
     claim_value = Decimal(cr["claim_display"])
@@ -175,14 +187,26 @@ def guard_facts(conn, tenant_id, invoice_id, as_of: date) -> dict:
         "AND paid_on<=%s),0), i.due_date, EXISTS(SELECT 1 FROM advance WHERE invoice_id=i.id) "
         "FROM invoice i WHERE i.id=%s AND i.tenant_id=%s", (as_of, view["id"], tenant_id)).fetchone()
     unpaid, due, has_advance = row
+    # amount due: the approved settlement offer if there is one, else the invoice total
+    owed = conn.execute(
+        "SELECT COALESCE((SELECT (draft->>'offer')::numeric FROM action_request WHERE invoice_id=%s "
+        "AND kind='settlement_offer' AND status='approved'), (SELECT total FROM invoice WHERE id=%s))",
+        (view["id"], view["id"])).fetchone()[0]
+    received = conn.execute("SELECT COALESCE(sum(amount),0) FROM payment WHERE invoice_id=%s "
+                            "AND paid_on<=%s", (view["id"], as_of)).fetchone()[0]
+    covered = received >= owed
     return {"band": view["evidence"]["band"], "eligibility": view["eligibility"]["status"],
-            "unpaid": unpaid > 0, "covered": unpaid <= 0, "has_advance": has_advance,
-            "past_due": due is not None and as_of > due}
+            "unpaid": unpaid > 0, "covered": covered, "has_advance": has_advance,
+            "past_due": due is not None and as_of > due,
+            "approved_action": bool(conn.execute(
+                "SELECT 1 FROM action_request WHERE invoice_id=%s AND kind='settlement_offer' "
+                "AND status='approved'", (view["id"],)).fetchone())}
 
 
-def move_state(conn, tenant_id, invoice_id, to: str, as_of: date, actor: str) -> None:
+def move_state(conn, tenant_id, invoice_id, to: str, as_of: date, actor: str,
+               extra: dict | None = None) -> None:
     states.transition(conn, tenant_id, invoice_id, to,
-                      guard_facts(conn, tenant_id, invoice_id, as_of), actor)
+                      guard_facts(conn, tenant_id, invoice_id, as_of) | (extra or {}), actor)
 
 
 def record_advance(conn, tenant_id, invoice_id, principal: str, disbursed_on: date, actor: str):
@@ -272,3 +296,149 @@ def collateral_series(conn, tenant_id, invoice_id) -> list[dict]:
     return conn.cursor(row_factory=dict_row).execute(
         "SELECT as_of::text, claim_value::text, exposure::text FROM collateral_snapshot "
         "WHERE invoice_id=%s AND tenant_id=%s ORDER BY as_of", (inv, tenant_id)).fetchall()
+
+
+def _cite(env: dict) -> dict:
+    return {"engine": env["engine"], "rule_version": env["rule_version"],
+            "input_hash": env["input_hash"]}
+
+
+def _action(r: dict) -> dict:
+    out = {k: r[k] for k in ("draft", "status", "proposed_by", "reject_reason")}
+    out |= {k: None if r[k] is None else str(r[k]) for k in ("id", "invoice_id", "approved_by")}
+    out["approved_at"] = r["approved_at"] and r["approved_at"].isoformat()
+    out["kind"] = r["kind"]
+    return out
+
+
+def propose_settlement_offer(conn, tenant_id, invoice_id, as_of: date, actor: str) -> dict:
+    """The agent's draft: the settlement engine's letter, filled from the other engines' output,
+    with the engine runs it relies on. One live offer per invoice; asking again returns it.
+    Nothing is sent: a person approves first."""
+    inv_id = _owned(conn, tenant_id, invoice_id)
+    cur = conn.cursor(row_factory=dict_row)
+    live = cur.execute(
+        "SELECT * FROM action_request WHERE invoice_id=%s AND kind='settlement_offer' AND "
+        "status IN ('proposed','approved','sent')", (inv_id,)).fetchone()
+    if live:
+        return _action(live)
+    env: dict = {}
+    view = invoice_view(conn, tenant_id, inv_id, as_of, env)
+    if view["claim"] is None or "interest" not in env:
+        raise states.Refused("no statutory claim to offer on yet")
+    row = cur.execute(
+        "SELECT i.invoice_no, i.invoice_date::text, s.legal_name AS supplier, b.legal_name AS buyer "
+        "FROM invoice i JOIN supplier s ON s.id=i.supplier_id JOIN buyer b ON b.id=i.buyer_id "
+        "WHERE i.id=%s", (inv_id,)).fetchone()
+    out = run_engine(conn, tenant_id, inv_id, "settlement", {
+        "invoice": {"invoice_no": row["invoice_no"], "invoice_date": row["invoice_date"],
+                    "principal": view["claim"]["principal"], "supplier_name": row["supplier"],
+                    "buyer_name": row["buyer"]},
+        "as_of": as_of.isoformat(), "discount_percent": "0", "agreed_costs": "0",
+        "eligibility": env["eligibility"], "deadline": env["deadline"], "interest": env["interest"],
+        "collateral": env["collateral"], "evidence": env["evidence"]}, reuse=True)
+    r = out["result"]
+    draft = {"offer": r["offer_display"], "floor": r["floor_display"], "as_of": r["as_of"],
+             "needs_lender_consent": r["needs_lender_consent"], "letter": r["letter"]["text"],
+             "cites": [_cite(e) for e in (env["eligibility"], env["deadline"], env["interest"],
+                                          env["collateral"], env["evidence"], out)]}
+    new = cur.execute(
+        "INSERT INTO action_request (tenant_id, invoice_id, kind, draft, status, proposed_by, "
+        "lender_consent_required) VALUES (%s,%s,'settlement_offer',%s::jsonb,'proposed',%s,%s) "
+        "RETURNING *", (tenant_id, inv_id, json.dumps(draft), actor,
+                        r["needs_lender_consent"])).fetchone()
+    return _action(new)
+
+
+def list_actions(conn, tenant_id, status: str | None) -> list[dict]:
+    rows = conn.cursor(row_factory=dict_row).execute(
+        "SELECT * FROM action_request WHERE tenant_id=%s AND (%s::text IS NULL OR status=%s) "
+        "ORDER BY id", (tenant_id, status, status)).fetchall()
+    return [_action(r) for r in rows]
+
+
+def decide_action(conn, tenant_id, action_id, user_id: str, approve: bool, reason: str | None = None):
+    """A named approver approves or rejects a proposed action. Approving a settlement offer moves
+    the invoice to settlement_offered (the guard reads the approval from the ledger)."""
+    try:
+        action_id = str(UUID(str(action_id)))
+    except ValueError:
+        raise NotFound("action") from None
+    with conn.transaction():
+        row = conn.cursor(row_factory=dict_row).execute(
+            "SELECT * FROM action_request WHERE id=%s AND tenant_id=%s FOR UPDATE",
+            (action_id, tenant_id)).fetchone()
+        if row is None:
+            raise NotFound("action")
+        if row["status"] != "proposed":
+            raise states.Refused(f"action is already {row['status']}")
+        if approve:
+            conn.execute("UPDATE action_request SET status='approved', approved_by=%s, "
+                         "approved_at=now() WHERE id=%s", (user_id, action_id))
+        else:
+            conn.execute("UPDATE action_request SET status='rejected', approved_by=%s, "
+                         "approved_at=now(), reject_reason=%s WHERE id=%s",
+                         (user_id, reason, action_id))
+        conn.execute(
+            "INSERT INTO audit_log (tenant_id, actor, action, object_type, object_id, after) "
+            "VALUES (%s,%s,%s,'action_request',%s,%s::jsonb)",
+            (tenant_id, f"user:{user_id}", "approve" if approve else "reject", action_id,
+             json.dumps({"kind": row["kind"], "reason": reason})))
+        if approve and row["kind"] == "settlement_offer":
+            move_state(conn, tenant_id, row["invoice_id"], "settlement_offered",
+                       date.fromisoformat(row["draft"]["as_of"]), f"user:{user_id}")
+        return _action(conn.cursor(row_factory=dict_row).execute(
+            "SELECT * FROM action_request WHERE id=%s", (action_id,)).fetchone())
+
+
+def record_payment(conn, tenant_id, invoice_id, amount: str, paid_on: date, utr, actor: str) -> dict:
+    """Development payment entry: a receipt, and a payment.received event for the agent."""
+    inv = _owned(conn, tenant_id, invoice_id)
+    if not Decimal(0) < Decimal(amount):
+        raise ValueError("amount must be positive")
+    with conn.transaction():
+        conn.execute("INSERT INTO payment (tenant_id, invoice_id, amount, paid_on, utr, source) "
+                     "VALUES (%s,%s,%s,%s,%s,'development entry')",
+                     (tenant_id, inv, Decimal(amount), paid_on, utr))
+        conn.execute("INSERT INTO event_queue (tenant_id, invoice_id, kind, payload) "
+                     "VALUES (%s,%s,'payment.received',%s::jsonb)",
+                     (tenant_id, inv, json.dumps({"as_of": paid_on.isoformat(), "amount": amount})))
+        conn.execute("INSERT INTO audit_log (tenant_id, actor, action, object_type, object_id, after) "
+                     "VALUES (%s,%s,'payment','invoice',%s,%s::jsonb)",
+                     (tenant_id, actor, inv, json.dumps({"amount": amount, "utr": utr})))
+    return {"invoice_id": inv, "amount": amount, "paid_on": paid_on.isoformat()}
+
+
+def run_waterfall(conn, tenant_id, invoice_id, as_of: date) -> dict:
+    """Split the receipts: the lender's exposure and agreed costs first, the rest (all statutory
+    interest) to the supplier. The collateral engine does the arithmetic; this stores its answer."""
+    env: dict = {}
+    view = invoice_view(conn, tenant_id, invoice_id, as_of, env)
+    if view["state"] != "paid":
+        raise states.Refused("waterfall runs once the invoice is paid")
+    receipts = conn.execute("SELECT COALESCE(sum(amount),0) FROM payment WHERE invoice_id=%s "
+                            "AND paid_on<=%s", (view["id"], as_of)).fetchone()[0]
+    out = run_engine(conn, tenant_id, view["id"], "collateral",
+                     env["collateral_inputs"] | {"receipts": str(receipts), "agreed_costs": "0"})
+    w = out["result"]["waterfall"]
+    conn.execute(
+        "INSERT INTO waterfall (invoice_id, tenant_id, as_of, receipts, lender_exposure, costs, "
+        "supplier, rule_version, input_hash) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+        "ON CONFLICT (invoice_id) DO UPDATE SET as_of=EXCLUDED.as_of, receipts=EXCLUDED.receipts, "
+        "lender_exposure=EXCLUDED.lender_exposure, costs=EXCLUDED.costs, supplier=EXCLUDED.supplier, "
+        "rule_version=EXCLUDED.rule_version, input_hash=EXCLUDED.input_hash",
+        (view["id"], tenant_id, as_of, receipts, w["lender_exposure"], w["costs"], w["supplier"],
+         out["rule_version"], out["input_hash"]))
+    return _waterfall_row(conn.cursor(row_factory=dict_row), tenant_id, view["id"])
+
+
+def confirm_repayment(conn, tenant_id, invoice_id, actor: str) -> None:
+    """The lender confirms the advance is repaid: marks it repaid and closes the invoice."""
+    inv = _owned(conn, tenant_id, invoice_id)
+    w = conn.execute("SELECT as_of FROM waterfall WHERE invoice_id=%s", (inv,)).fetchone()
+    if w is None:
+        raise states.Refused("waterfall has not run")
+    with conn.transaction():
+        move_state(conn, tenant_id, inv, "closed", w[0], actor, {"lender_confirmed": True})
+        conn.execute("UPDATE advance SET status='repaid', repaid_on=%s WHERE invoice_id=%s",
+                     (w[0], inv))

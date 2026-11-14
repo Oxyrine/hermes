@@ -16,7 +16,8 @@ class ScriptedAgent:
 
     def handle(self, event: dict) -> None:
         # ponytail: one handler so far; each later ticket adds its row of the event table
-        {"deadline.passed": self.deadline_passed}[event["kind"]](event)
+        {"deadline.passed": self.deadline_passed,
+         "payment.received": self.payment_received}[event["kind"]](event)
 
     def deadline_passed(self, event: dict) -> None:
         """Re-run interest and collateral (the invoice read runs and stores both engines as of
@@ -25,3 +26,23 @@ class ScriptedAgent:
         view = self.call("GET", f"/v1/invoices/{inv}", params={"as_of": as_of})
         if view["state"] in ("verified", "financeable", "advanced"):
             self.call("POST", f"/v1/invoices/{inv}/state", json={"to": "overdue", "as_of": as_of})
+            view["state"] = "overdue"
+        if view["state"] == "overdue":
+            self.call("POST", f"/v1/invoices/{inv}/actions",
+                      json={"kind": "settlement_offer", "as_of": as_of})
+
+    def payment_received(self, event: dict) -> None:
+        """Re-run interest and collateral as of the payment date (the read does both); when the
+        receipts cover the amount due, move to paid and run the waterfall. The lender then
+        confirms repayment, which closes the invoice."""
+        as_of, inv = event["payload"]["as_of"], event["invoice_id"]
+        view = self.call("GET", f"/v1/invoices/{inv}", params={"as_of": as_of})
+        if view["state"] in ("paid", "closed"):
+            return
+        try:
+            self.call("POST", f"/v1/invoices/{inv}/state", json={"to": "paid", "as_of": as_of})
+        except RuntimeError as e:
+            if " 409 " not in str(e):  # guard refused: receipts do not cover the amount due yet
+                raise
+            return
+        self.call("POST", f"/v1/invoices/{inv}/waterfall", json={"as_of": as_of})

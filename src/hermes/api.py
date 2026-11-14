@@ -63,6 +63,44 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
         if who["role"] not in roles:
             raise HTTPException(403, "role not permitted")
 
+    if env == "development":  # receipts are entered by hand; no payment rail exists yet
+
+        @app.post("/dev/payments")
+        def payment(body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+            require(who, "lender_ops")
+            try:
+                on = date.fromisoformat(body["paid_on"]) if body.get("paid_on") else service.today(c)
+                return service.record_payment(c, who["tenant"], body["invoice_id"], body["amount"],
+                                              on, body.get("utr"), f"user:{who['sub']}")
+            except service.NotFound:
+                raise HTTPException(404, "invoice not found") from None
+            except (ValueError, KeyError, TypeError, ArithmeticError) as e:
+                raise HTTPException(422, f"bad payment: {e}") from None
+
+    @app.post("/v1/invoices/{invoice_id}/waterfall")
+    def waterfall(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        require(who, "agent", "hermes_ops")
+        try:
+            as_of = date.fromisoformat(body["as_of"]) if body.get("as_of") else service.today(c)
+            return service.run_waterfall(c, who["tenant"], invoice_id, as_of)
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(422, f"bad request: {e}") from None
+
+    @app.post("/v1/invoices/{invoice_id}/lender-confirm")
+    def lender_confirm(invoice_id: str, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops")
+        try:
+            service.confirm_repayment(c, who["tenant"], invoice_id, f"user:{who['sub']}")
+            return {"state": "closed"}
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+
     @app.post("/v1/invoices/{invoice_id}/advances")
     def advance(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
         require(who, "lender_ops")
@@ -92,6 +130,43 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
             raise HTTPException(409, str(e)) from None
         except (ValueError, KeyError, TypeError) as e:
             raise HTTPException(422, f"bad request: {e}") from None
+
+    @app.post("/v1/invoices/{invoice_id}/actions")
+    def propose(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        require(who, "agent", "hermes_ops")
+        try:
+            if body.get("kind") != "settlement_offer":
+                raise ValueError("only settlement_offer is supported")
+            as_of = date.fromisoformat(body["as_of"]) if body.get("as_of") else service.today(c)
+            return service.propose_settlement_offer(c, who["tenant"], invoice_id, as_of,
+                                                    f"{who['role']}:{who['sub']}")
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(422, f"bad request: {e}") from None
+
+    def decide(action_id, who, c, approve, reason=None):
+        require(who, "lender_approver")
+        try:
+            return service.decide_action(c, who["tenant"], action_id, who["sub"], approve, reason)
+        except service.NotFound:
+            raise HTTPException(404, "action not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+
+    @app.post("/v1/actions/{action_id}/approve")
+    def approve(action_id: str, who=Depends(caller), c=Depends(conn)):
+        return decide(action_id, who, c, True)
+
+    @app.post("/v1/actions/{action_id}/reject")
+    def reject(action_id: str, body: dict = Body(default={}), who=Depends(caller), c=Depends(conn)):
+        return decide(action_id, who, c, False, body.get("reason"))
+
+    @app.get("/v1/actions")
+    def actions(status: str | None = None, who=Depends(caller), c=Depends(conn)):
+        return service.list_actions(c, who["tenant"], status)
 
     @app.get("/v1/invoices/{invoice_id}/timeline")
     def timeline(invoice_id: str, who=Depends(caller), c=Depends(conn)):

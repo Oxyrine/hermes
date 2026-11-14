@@ -1,3 +1,5 @@
+import { revalidatePath } from "next/cache";
+
 // Invoice page. Server component: every figure is formatted by the API; nothing is computed here.
 export const dynamic = "force-dynamic";
 
@@ -10,20 +12,39 @@ async function api(path, init) {
 }
 
 // Development only: the API serves /dev/login in the development environment alone.
-async function load() {
+async function headersFor(email) {
   const { token } = await api("/dev/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: process.env.HERMES_DEV_EMAIL || "ops@lender-a.example" }),
+    body: JSON.stringify({ email }),
   });
-  const headers = { authorization: `Bearer ${token}` };
+  return { authorization: `Bearer ${token}` };
+}
+
+// Approve or reject as the named approver; the API records who and when.
+async function decide(formData) {
+  "use server";
+  const verb = formData.get("verb") === "approve" ? "approve" : "reject";
+  const headers = await headersFor(process.env.HERMES_APPROVER_EMAIL || "approver@lender-a.example");
+  await api(`/v1/actions/${encodeURIComponent(formData.get("id"))}/${verb}`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ reason: verb === "reject" ? "rejected on the approval list" : undefined }),
+  });
+  revalidatePath("/");
+}
+
+async function load() {
+  const headers = await headersFor(process.env.HERMES_DEV_EMAIL || "ops@lender-a.example");
   const [first] = await api("/v1/invoices", { headers });
-  const [inv, series, timeline] = await Promise.all([
+  const approver = await headersFor(process.env.HERMES_APPROVER_EMAIL || "approver@lender-a.example");
+  const [inv, series, timeline, actions] = await Promise.all([
     api(`/v1/invoices/${first.id}`, { headers }),
     api(`/v1/invoices/${first.id}/collateral-series`, { headers }),
     api(`/v1/invoices/${first.id}/timeline`, { headers }),
+    api("/v1/actions?status=proposed", { headers: approver }),
   ]);
-  return { ...inv, series, timeline };
+  return { ...inv, series, timeline, actions };
 }
 
 // Two lines (claim value, exposure) from API series. Number() only positions points on the
@@ -94,6 +115,31 @@ export default async function Page() {
 
       <h2>Claim value against exposure</h2>
       <Chart series={inv.series} />
+
+      <h2>Approval list</h2>
+      {inv.actions.length === 0 ? <p>Nothing awaiting approval.</p> : inv.actions.map((a) => (
+        <form key={a.id} action={decide} style={{ border: "1px solid #ccc", padding: 12, marginBottom: 12 }}>
+          <input type="hidden" name="id" value={a.id} />
+          <p><strong>{a.kind}</strong> &middot; offer Rs {a.draft.offer} &middot; floor Rs {a.draft.floor}
+            {a.draft.needs_lender_consent ? " (needs lender consent)" : ""}</p>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{a.draft.letter}</pre>
+          <p>Relies on: {a.draft.cites.map((c) => `${c.engine} ${c.rule_version}`).join(", ")}</p>
+          <button name="verb" value="approve">Approve</button>{" "}
+          <button name="verb" value="reject">Reject</button>
+        </form>
+      ))}
+
+      {inv.waterfall && (
+        <>
+          <h2>Waterfall as of {inv.waterfall.as_of} ({inv.waterfall.rule_version})</h2>
+          <table><tbody>
+            <Row k="Receipts" v={`Rs ${inv.waterfall.receipts}`} />
+            <Row k="To lender (exposure)" v={`Rs ${inv.waterfall.lender_exposure}`} />
+            <Row k="Agreed costs" v={`Rs ${inv.waterfall.costs}`} />
+            <Row k="To supplier (incl. all statutory interest)" v={`Rs ${inv.waterfall.supplier}`} />
+          </tbody></table>
+        </>
+      )}
 
       <h2>Timeline</h2>
       <ol>

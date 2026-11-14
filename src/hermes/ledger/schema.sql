@@ -133,3 +133,8 @@ CREATE TABLE webhook_delivery (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   delivered_at TIMESTAMPTZ, last_status INT);
 
 CREATE TABLE clock (id BOOLEAN PRIMARY KEY DEFAULT true CHECK (id), today DATE NOT NULL);  -- development clock, at most one row
+
+CREATE TABLE waterfall (invoice_id UUID PRIMARY KEY REFERENCES invoice,
+  tenant_id UUID NOT NULL REFERENCES tenant, as_of DATE NOT NULL, receipts NUMERIC(18,2) NOT NULL,
+  lender_exposure NUMERIC(18,2) NOT NULL, costs NUMERIC(18,2) NOT NULL, supplier NUMERIC(18,2) NOT NULL,
+  rule_version TEXT NOT NULL, input_hash CHAR(64) NOT NULL);   -- the collateral engine's receipts split
