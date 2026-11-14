@@ -4,17 +4,17 @@
 
 **Blocked by:** 09, 15
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Every adapter implements the one fetch interface from the product spec (§3) and returns raw records carrying source, external id, payload, fetch time and the consent that covered the pull
-- [ ] An adapter refuses to fetch when no live consent exists for that source and purpose
-- [ ] Raw payloads are stored unchanged and never edited; normalised rows point back to them
-- [ ] Each ingested record publishes an event routed to its invoice
-- [ ] Matching uses GSTINs, invoice number, date and amount; an exact match links; a fuzzy match below threshold creates a review action and does not link
-- [ ] IMS events are append-only: a reversal is a new row
-- [ ] An IMS change triggers evidence score and collateral re-runs
-- [ ] The e-invoice QR is decoded from the invoice PDF and its IRN checked against the invoice
-- [ ] Bank credits become payments on the matched invoice and trigger interest and collateral re-runs; an invoice whose receipts cover the amount due moves to paid
-- [ ] One command loads the whole synthetic set: 3 suppliers, 4 buyers, 30 invoices
-- [ ] The seed-and-reset command and the late-buyer demo now run on the synthetic set
-- [ ] Tests through the API cover an exact match, a fuzzy match going to review, a missing consent, and reconciliation to paid
+- [x] Every adapter implements the one fetch interface from the product spec (§3) and returns raw records carrying source, external id, payload, fetch time and the consent that covered the pull
+- [x] An adapter refuses to fetch when no live consent exists for that source and purpose
+- [x] Raw payloads are stored unchanged and never edited; normalised rows point back to them
+- [x] Each ingested record publishes an event routed to its invoice
+- [x] Matching uses GSTINs, invoice number, date and amount; an exact match links; a fuzzy match below threshold creates a review action and does not link
+- [x] IMS events are append-only: a reversal is a new row
+- [x] An IMS change triggers evidence score and collateral re-runs
+- [x] The e-invoice QR is decoded from the invoice PDF and its IRN checked against the invoice
+- [x] Bank credits become payments on the matched invoice and trigger interest and collateral re-runs; an invoice whose receipts cover the amount due moves to paid
+- [x] One command loads the whole synthetic set: 3 suppliers, 4 buyers, 30 invoices
+- [x] The seed-and-reset command and the late-buyer demo now run on the synthetic set
+- [x] Tests through the API cover an exact match, a fuzzy match going to review, a missing consent, and reconciliation to paid

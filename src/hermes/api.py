@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, Response
 from psycopg.rows import dict_row
 
 from hermes import statement, supplier
-from hermes.ledger import bank_rates, db, onboarding, service, states
+from hermes.ledger import bank_rates, db, ingest, onboarding, service, states
 from hermes.ledger.service import NotFound
 
 TOKEN_TTL_SECONDS = 8 * 3600
@@ -196,6 +196,13 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
         require(who, "supplier")
         return refuse(onboarding.withdraw_consent, c, who["tenant"], supplier_id, consent_id,
                       mine(who))
+
+    @app.post("/v1/suppliers/{supplier_id}/pulls")
+    def pull(supplier_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        """Fetch one source for a supplier through its adapter, under their consent, and ingest it."""
+        require(who, "lender_ops", "hermes_ops")
+        return refuse(ingest.pull, c, who["tenant"], supplier_id, body,
+                      os.environ.get("HERMES_FIXTURES", "storage/synthetic"))
 
     @app.post("/v1/invoices")
     def create_invoice(body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
