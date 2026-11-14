@@ -131,3 +131,5 @@ CREATE TABLE webhook_delivery (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, subscription_id UUID NOT NULL REFERENCES webhook_subscription,
   event TEXT NOT NULL, payload JSONB, attempts INT NOT NULL DEFAULT 0, next_attempt_at TIMESTAMPTZ,
   delivered_at TIMESTAMPTZ, last_status INT);
+
+CREATE TABLE clock (id BOOLEAN PRIMARY KEY DEFAULT true CHECK (id), today DATE NOT NULL);  -- development clock, at most one row

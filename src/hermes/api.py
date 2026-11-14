@@ -4,21 +4,16 @@ for uvicorn (HERMES_ENV defaults to production, so the development login is opt-
 
 import os
 import time
-from datetime import date, datetime
-from zoneinfo import ZoneInfo
+from datetime import date
 
 import jwt
 import psycopg
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from psycopg.rows import dict_row
 
-from hermes.ledger import db, service
+from hermes.ledger import db, service, states
 
 TOKEN_TTL_SECONDS = 8 * 3600
-
-
-def today_ist() -> date:
-    return datetime.now(ZoneInfo("Asia/Kolkata")).date()
 
 
 def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
@@ -52,6 +47,66 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
                  "exp": int(time.time()) + TOKEN_TTL_SECONDS}, secret, algorithm="HS256")
             return {"token": token, "role": row["role"]}
 
+    if env == "development":  # the clock exists only here
+
+        @app.put("/dev/clock")
+        def set_clock(body: dict = Body(...), c=Depends(conn)):
+            service.set_clock(c, date.fromisoformat(body["date"]))
+            return {"date": body["date"]}
+
+        @app.post("/dev/tick")
+        def tick(body: dict = Body(...), c=Depends(conn)):
+            d = date.fromisoformat(body["date"]) if body.get("date") else service.today(c)
+            return service.tick(c, d)
+
+    def require(who, *roles):
+        if who["role"] not in roles:
+            raise HTTPException(403, "role not permitted")
+
+    @app.post("/v1/invoices/{invoice_id}/advances")
+    def advance(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops")
+        try:
+            on = date.fromisoformat(body["disbursed_on"]) if body.get("disbursed_on")                 else service.today(c)
+            return service.record_advance(c, who["tenant"], invoice_id, body["principal"], on,
+                                          f"user:{who['sub']}")
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+        except (ValueError, KeyError, TypeError, ArithmeticError) as e:
+            raise HTTPException(422, f"bad advance: {e}") from None
+
+    @app.post("/v1/invoices/{invoice_id}/state")
+    def move_state(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        """The agent's write path: guards are evaluated server-side from the ledger."""
+        require(who, "agent", "hermes_ops")
+        try:
+            as_of = date.fromisoformat(body["as_of"]) if body.get("as_of") else service.today(c)
+            service.move_state(c, who["tenant"], invoice_id, body["to"], as_of,
+                               f"{who['role']}:{who['sub']}")
+            return {"state": body["to"]}
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(422, f"bad request: {e}") from None
+
+    @app.get("/v1/invoices/{invoice_id}/timeline")
+    def timeline(invoice_id: str, who=Depends(caller), c=Depends(conn)):
+        try:
+            return service.timeline(c, who["tenant"], invoice_id)
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+
+    @app.get("/v1/invoices/{invoice_id}/collateral-series")
+    def collateral_series(invoice_id: str, who=Depends(caller), c=Depends(conn)):
+        try:
+            return service.collateral_series(c, who["tenant"], invoice_id)
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+
     @app.get("/v1/invoices")
     def invoices(who=Depends(caller), c=Depends(conn)):
         return service.list_invoices(c, who["tenant"])
@@ -59,7 +114,7 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
     @app.get("/v1/invoices/{invoice_id}")
     def invoice(invoice_id: str, as_of: date | None = None, who=Depends(caller), c=Depends(conn)):
         try:
-            return service.invoice_view(c, who["tenant"], invoice_id, as_of or today_ist())
+            return service.invoice_view(c, who["tenant"], invoice_id, as_of or service.today(c))
         except service.NotFound:
             raise HTTPException(404, "invoice not found") from None
 

@@ -4,14 +4,16 @@ Every query takes the caller's tenant id and filters by it.
 """
 
 import json
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from psycopg.rows import dict_row
 
 from hermes.engines import collateral, deadline, eligibility, evidence, interest, settlement
 from hermes.engines.common import canonical_json
+from hermes.ledger import states
 
 ENGINES = {
     "collateral": collateral.run, "deadline": deadline.run, "eligibility": eligibility.run,
@@ -152,3 +154,121 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date) -> dict:
     out["collateral"] = _section(col, exposure=cr["exposure_display"], ltv=cr["ltv"],
                                  advance_rate=cr["advance_rate"], alerts=cr["alerts"])
     return out
+
+
+def today(conn) -> date:
+    """The injected clock; the real IST date when none is set."""
+    row = conn.execute("SELECT today FROM clock").fetchone()
+    return row[0] if row else datetime.now(ZoneInfo("Asia/Kolkata")).date()
+
+
+def set_clock(conn, d: date) -> None:
+    conn.execute("INSERT INTO clock (today) VALUES (%s) ON CONFLICT (id) DO UPDATE SET today=%s",
+                 (d, d))
+
+
+def guard_facts(conn, tenant_id, invoice_id, as_of: date) -> dict:
+    """Facts the state machine's guards read, computed here so callers cannot supply them."""
+    view = invoice_view(conn, tenant_id, invoice_id, as_of)
+    row = conn.execute(
+        "SELECT i.total - COALESCE((SELECT sum(amount) FROM payment WHERE invoice_id=i.id "
+        "AND paid_on<=%s),0), i.due_date, EXISTS(SELECT 1 FROM advance WHERE invoice_id=i.id) "
+        "FROM invoice i WHERE i.id=%s AND i.tenant_id=%s", (as_of, view["id"], tenant_id)).fetchone()
+    unpaid, due, has_advance = row
+    return {"band": view["evidence"]["band"], "eligibility": view["eligibility"]["status"],
+            "unpaid": unpaid > 0, "covered": unpaid <= 0, "has_advance": has_advance,
+            "past_due": due is not None and as_of > due}
+
+
+def move_state(conn, tenant_id, invoice_id, to: str, as_of: date, actor: str) -> None:
+    states.transition(conn, tenant_id, invoice_id, to,
+                      guard_facts(conn, tenant_id, invoice_id, as_of), actor)
+
+
+def record_advance(conn, tenant_id, invoice_id, principal: str, disbursed_on: date, actor: str):
+    """Record a lender disbursement (Hermes moves no money). A verified invoice passes through
+    financeable first, under the same guards."""
+    amount = Decimal(principal)
+    view = invoice_view(conn, tenant_id, invoice_id, disbursed_on)  # NotFound if not ours
+    if not Decimal(0) < amount <= Decimal(view["total"]):
+        raise ValueError("principal must be positive and at most the invoice total")
+    with conn.transaction():
+        if view["state"] == "verified":
+            move_state(conn, tenant_id, invoice_id, "financeable", disbursed_on, actor)
+        conn.execute(
+            "INSERT INTO advance (tenant_id, invoice_id, principal, nominal_rate, disbursed_on, "
+            "status) SELECT %s,%s,%s,lender_rate_nominal,%s,'open' FROM tenant WHERE id=%s",
+            (tenant_id, view["id"], amount, disbursed_on, tenant_id))
+        move_state(conn, tenant_id, invoice_id, "advanced", disbursed_on, actor)
+    return invoice_view(conn, tenant_id, invoice_id, disbursed_on)
+
+
+def tick(conn, d: date) -> dict:
+    """Daily scheduler job for date d: queue deadline.passed for each unpaid invoice past its
+    stored due date (once per invoice per date), and write d's collateral snapshot rows."""
+    queued = snapped = 0
+    open_invoices = conn.execute(
+        "SELECT id::text, tenant_id::text, due_date < %s AND total > COALESCE((SELECT sum(amount) "
+        "FROM payment WHERE invoice_id=invoice.id AND paid_on<=%s),0) FROM invoice "
+        "WHERE state NOT IN ('paid','closed') ORDER BY id", (d, d)).fetchall()
+    for inv, tenant, late in open_invoices:
+        if late and not conn.execute(
+            "SELECT 1 FROM event_queue WHERE invoice_id=%s AND kind='deadline.passed' "
+            "AND payload->>'as_of'=%s", (inv, d.isoformat())).fetchone():
+            conn.execute("INSERT INTO event_queue (tenant_id, invoice_id, kind, payload) "
+                         "VALUES (%s,%s,'deadline.passed',%s::jsonb)",
+                         (tenant, inv, json.dumps({"as_of": d.isoformat()})))
+            queued += 1
+        v = invoice_view(conn, tenant, inv, d)
+        if v["collateral"]:
+            conn.execute(
+                "INSERT INTO collateral_snapshot (invoice_id, tenant_id, as_of, claim_value, "
+                "exposure, ltv, evidence_score, band) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (invoice_id, as_of) DO UPDATE SET claim_value=EXCLUDED.claim_value, "
+                "exposure=EXCLUDED.exposure, ltv=EXCLUDED.ltv, evidence_score=EXCLUDED.evidence_score, "
+                "band=EXCLUDED.band",
+                (inv, tenant, d, v["claim"]["claim_value"], v["collateral"]["exposure"],
+                 v["collateral"]["ltv"], v["evidence"]["score"], v["evidence"]["band"]))
+            snapped += 1
+    return {"date": d.isoformat(), "events_queued": queued, "snapshots": snapped}
+
+
+def _owned(conn, tenant_id, invoice_id) -> str:
+    try:
+        invoice_id = str(UUID(str(invoice_id)))
+    except ValueError:
+        raise NotFound("invoice") from None
+    if not conn.execute("SELECT 1 FROM invoice WHERE id=%s AND tenant_id=%s",
+                        (invoice_id, tenant_id)).fetchone():
+        raise NotFound("invoice")
+    return invoice_id
+
+
+def timeline(conn, tenant_id, invoice_id) -> list[dict]:
+    """Events, engine runs and state changes for one invoice, oldest first."""
+    inv = _owned(conn, tenant_id, invoice_id)
+    cur = conn.cursor(row_factory=dict_row)
+    rows = (
+        [{"kind": "event", "event": r["kind"], "payload": r["payload"], "at": r["at"]}
+         for r in cur.execute("SELECT kind, payload, available_at AS at FROM event_queue "
+                              "WHERE invoice_id=%s AND tenant_id=%s", (inv, tenant_id))]
+        + [{"kind": "engine_run", "engine": r["engine"], "rule_version": r["rule_version"],
+            "at": r["at"]}
+           for r in cur.execute("SELECT engine, rule_version, run_at AS at FROM engine_run "
+                                "WHERE invoice_id=%s AND tenant_id=%s", (inv, tenant_id))]
+        + [{"kind": "state_change", "from": r["frm"], "to": r["to"], "actor": r["actor"],
+            "at": r["at"]}
+           for r in cur.execute("SELECT before->>'state' AS frm, after->>'state' AS to, actor, at "
+                                "FROM audit_log WHERE object_id=%s AND tenant_id=%s AND "
+                                "action='state_change'", (inv, tenant_id))]
+    )
+    rows.sort(key=lambda r: r["at"])
+    return [{**r, "at": r["at"].isoformat()} for r in rows]
+
+
+def collateral_series(conn, tenant_id, invoice_id) -> list[dict]:
+    """The daily snapshot rows the tick wrote: claim value and exposure over time."""
+    inv = _owned(conn, tenant_id, invoice_id)
+    return conn.cursor(row_factory=dict_row).execute(
+        "SELECT as_of::text, claim_value::text, exposure::text FROM collateral_snapshot "
+        "WHERE invoice_id=%s AND tenant_id=%s ORDER BY as_of", (inv, tenant_id)).fetchall()
