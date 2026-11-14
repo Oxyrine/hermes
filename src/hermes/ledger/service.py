@@ -436,10 +436,13 @@ def dispute_pack(conn, tenant_id, action_id) -> tuple[dict, dict]:
     return row[0]["pack"], {"as_of": row[0]["as_of"], "dispute_pack": row[0]["pack"]}
 
 
-def list_actions(conn, tenant_id, status: str | None) -> list[dict]:
+def list_actions(conn, tenant_id, status: str | None, supplier_id: str | None = None) -> list[dict]:
+    """A supplier sees only the dispute packs of their own invoices; the lender side sees all."""
     rows = conn.cursor(row_factory=dict_row).execute(
-        "SELECT * FROM action_request WHERE tenant_id=%s AND (%s::text IS NULL OR status=%s) "
-        "ORDER BY id", (tenant_id, status, status)).fetchall()
+        "SELECT a.* FROM action_request a JOIN invoice i ON i.id=a.invoice_id "
+        "WHERE a.tenant_id=%s AND (%s::text IS NULL OR a.status=%s) "
+        "AND (%s::text IS NULL OR (a.kind='odr_pack' AND i.supplier_id::text=%s)) "
+        "ORDER BY a.id", (tenant_id, status, status, supplier_id, supplier_id)).fetchall()
     return [_action(r) for r in rows]
 
 

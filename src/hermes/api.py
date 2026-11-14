@@ -15,9 +15,11 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from psycopg.rows import dict_row
 
-from hermes.ledger import db, service, states
+from hermes import statement
+from hermes.ledger import bank_rates, db, service, states
 
 TOKEN_TTL_SECONDS = 8 * 3600
+NOINDEX = {"X-Robots-Tag": "noindex, nofollow"}
 OBJECT = re.compile(r"^/v1/(invoices|actions)/([0-9a-fA-F-]{36})(/|$)")
 TABLES = {"invoices": ("invoice", "invoice"), "actions": ("action_request", "action")}
 
@@ -267,8 +269,12 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
     def decide(action_id, who, c, approve, reason=None):
         require(who, "lender_approver", "supplier")  # which of the two, by kind, is the service's call
         try:
-            return service.decide_action(c, who["tenant"], action_id, who["sub"], who["role"],
-                                         approve, reason)
+            out = service.decide_action(c, who["tenant"], action_id, who["sub"], who["role"],
+                                        approve, reason)
+            if approve and out["kind"] == "settlement_offer":  # the offer goes with a signed link
+                out["buyer_link"] = "/public/statement/" + statement.make_token(
+                    secret, who["tenant"], out["invoice_id"])
+            return out
         except PermissionError as e:
             raise HTTPException(403, str(e)) from None
         except service.NotFound:
@@ -304,8 +310,9 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
 
     @app.get("/v1/actions")
     def actions(status: str | None = None, who=Depends(caller), c=Depends(conn)):
-        require(who, "lender_ops", "lender_approver", "hermes_ops")
-        return service.list_actions(c, who["tenant"], status)
+        require(who, "lender_ops", "lender_approver", "hermes_ops", "supplier")
+        return service.list_actions(c, who["tenant"], status,
+                                    who.get("supplier") if who["role"] == "supplier" else None)
 
     @app.get("/v1/invoices/{invoice_id}/timeline")
     def timeline(invoice_id: str, who=Depends(caller), c=Depends(conn)):
@@ -334,6 +341,32 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
             return service.invoice_view(c, who["tenant"], invoice_id, as_of or service.today(c))
         except service.NotFound:
             raise HTTPException(404, "invoice not found") from None
+
+    @app.get("/v1/admin/bank-rates")
+    def rates(who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "hermes_ops")
+        return bank_rates.list_rates(c)
+
+    @app.post("/v1/admin/bank-rates")
+    def enter_rate(body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "hermes_ops")
+        try:
+            return bank_rates.enter(c, who["sub"], date.fromisoformat(body["effective_from"]),
+                                    str(body["rate"]), body["source_url"])
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+        except (ValueError, KeyError, TypeError, ArithmeticError) as e:
+            raise HTTPException(422, f"bad rate: {e}") from None
+
+    @app.post("/v1/admin/bank-rates/{effective_from}/approve")
+    def approve_rate(effective_from: date, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "hermes_ops")
+        try:
+            return bank_rates.approve(c, who["sub"], effective_from)
+        except service.NotFound:
+            raise HTTPException(404, "rate not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
 
     @app.get("/v1/invoices/{invoice_id}/receipts")
     def receipts(invoice_id: str, who=Depends(caller), c=Depends(conn)):
@@ -367,6 +400,24 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
             raise HTTPException(404, "engine or invoice not found") from None
         except (ValueError, KeyError, TypeError) as e:
             raise HTTPException(422, f"engine rejected inputs: {e}") from None
+
+    @app.get("/public/statement/{token}")
+    def buyer_statement(token: str, response: Response, c=Depends(conn)):
+        response.headers.update(NOINDEX)
+        try:
+            return statement.statement(c, secret, token)
+        except statement.Refused:
+            raise HTTPException(404, "This link is not valid.", headers=NOINDEX) from None
+
+    @app.post("/public/statement/{token}/respond")
+    def buyer_respond(token: str, response: Response, body: dict = Body(...), c=Depends(conn)):
+        response.headers.update(NOINDEX)
+        try:
+            return statement.respond(c, secret, token, body.get("choice"), body.get("note"))
+        except statement.Refused:
+            raise HTTPException(404, "This link is not valid.", headers=NOINDEX) from None
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
 
     return app
 

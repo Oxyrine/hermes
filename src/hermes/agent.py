@@ -18,7 +18,8 @@ class ScriptedAgent:
         # ponytail: one handler so far; each later ticket adds its row of the event table
         {"deadline.passed": self.deadline_passed,
          "payment.received": self.payment_received,
-         "offer.expired": self.offer_expired}[event["kind"]](event)
+         "offer.expired": self.offer_expired,
+         "bank_rate.changed": self.bank_rate_changed}[event["kind"]](event)
 
     def deadline_passed(self, event: dict) -> None:
         """Re-run interest and collateral (the invoice read runs and stores both engines as of
@@ -53,3 +54,7 @@ class ScriptedAgent:
         The agent never files; it cannot reach the portal."""
         self.call("POST", f"/v1/invoices/{event['invoice_id']}/actions",
                   json={"kind": "odr_pack", "as_of": event["payload"]["as_of"]})
+
+    def bank_rate_changed(self, event: dict) -> None:
+        """Re-run interest and collateral as of the event date (the read does both); no state moves."""
+        self.call("GET", f"/v1/invoices/{event['invoice_id']}", params={"as_of": event["payload"]["as_of"]})
