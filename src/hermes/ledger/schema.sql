@@ -97,12 +97,14 @@ CREATE TABLE collateral_snapshot (invoice_id UUID NOT NULL REFERENCES invoice,
 
 CREATE TABLE action_request (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, invoice_id UUID NOT NULL REFERENCES invoice,
-  kind TEXT NOT NULL CHECK (kind IN ('settlement_offer','odr_pack','buyer_note','gstr1a_draft')),
+  kind TEXT NOT NULL CHECK (kind IN ('settlement_offer','odr_pack','buyer_note','gstr1a_draft',
+    'doc_link','objection','contract_terms')),
   draft JSONB, status TEXT NOT NULL CHECK (status IN ('proposed','approved','rejected','sent','expired')),
   proposed_by TEXT, approved_by UUID REFERENCES app_user, approved_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ, reject_reason TEXT, edit_difference JSONB,
   lender_consent_required BOOLEAN NOT NULL DEFAULT false,
-  lender_consent_by UUID REFERENCES app_user, lender_consent_at TIMESTAMPTZ);
+  lender_consent_by UUID REFERENCES app_user, lender_consent_at TIMESTAMPTZ,
+  approvals JSONB NOT NULL DEFAULT '[]');   -- [{user, email, role, at}], one per approver slot filled
 
 CREATE TABLE audit_log (id BIGSERIAL PRIMARY KEY, tenant_id UUID REFERENCES tenant,
   at TIMESTAMPTZ NOT NULL DEFAULT now(), actor TEXT, action TEXT NOT NULL, object_type TEXT,

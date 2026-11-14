@@ -217,7 +217,10 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
         require(who, "agent", "hermes_ops")
         try:
             if body.get("kind") != "settlement_offer":
-                raise ValueError("only settlement_offer is supported")
+                dl = body.get("deadline")
+                return service.propose_action(c, who["tenant"], invoice_id, body.get("kind"),
+                                              body.get("draft"), f"{who['role']}:{who['sub']}",
+                                              dl and date.fromisoformat(dl))
             as_of = date.fromisoformat(body["as_of"]) if body.get("as_of") else service.today(c)
             return service.propose_settlement_offer(c, who["tenant"], invoice_id, as_of,
                                                     f"{who['role']}:{who['sub']}")
@@ -247,8 +250,8 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
 
     @app.get("/v1/actions")
     def actions(status: str | None = None, who=Depends(caller), c=Depends(conn)):
-        require(who, "lender_ops", "lender_approver", "hermes_ops")
-        return service.list_actions(c, who["tenant"], status)
+        require(who, "lender_ops", "lender_approver", "hermes_ops", "supplier")
+        return service.list_actions(c, who["tenant"], status, who["role"], who.get("supplier"))
 
     @app.get("/v1/invoices/{invoice_id}/timeline")
     def timeline(invoice_id: str, who=Depends(caller), c=Depends(conn)):

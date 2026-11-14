@@ -319,12 +319,52 @@ def _cite(env: dict) -> dict:
             "input_hash": env["input_hash"]}
 
 
+def slots(kind: str, lender_consent: bool = False) -> list[tuple]:
+    """Who must approve (product spec section 7): one role from each tuple."""
+    if kind == "objection":
+        return [("hermes_ops",), ("supplier",)]
+    if kind == "contract_terms":
+        return [("hermes_ops",)]
+    if kind == "doc_link":
+        return [("supplier", "hermes_ops")]
+    return [("supplier",)] + ([("lender_approver",)] if kind == "settlement_offer" and lender_consent else [])
+
+
+def outstanding(r: dict) -> list[str]:
+    """Approver slots not yet filled, as role names (alternatives joined with /)."""
+    left = slots(r["kind"], r["lender_consent_required"])
+    for a in r["approvals"]:
+        i = next((i for i, s in enumerate(left) if a["role"] in s), None)
+        if i is not None:
+            del left[i]
+    return ["/".join(s) for s in left]
+
+
 def _action(r: dict) -> dict:
-    out = {k: r[k] for k in ("draft", "status", "proposed_by", "reject_reason")}
+    out = {k: r[k] for k in ("draft", "status", "proposed_by", "reject_reason", "approvals", "kind")}
     out |= {k: None if r[k] is None else str(r[k]) for k in ("id", "invoice_id", "approved_by")}
     out["approved_at"] = r["approved_at"] and r["approved_at"].isoformat()
-    out["kind"] = r["kind"]
+    out["edit_difference"] = r["edit_difference"]
+    out["final_draft"] = (r["draft"] or {}) | {k: v["to"] for k, v in (r["edit_difference"] or {}).items()}
+    out["needs"] = outstanding(r) if r["status"] == "proposed" else []
+    out["deadline"] = r.get("deadline") and r["deadline"].isoformat()
     return out
+
+
+def propose_action(conn, tenant_id, invoice_id, kind: str, draft: dict, actor: str,
+                   deadline: date | None = None) -> dict:
+    """The agent's draft of any other gated action; nothing happens until people approve."""
+    if kind == "settlement_offer" or kind not in ("odr_pack", "buyer_note", "gstr1a_draft",
+                                                  "doc_link", "objection", "contract_terms"):
+        raise ValueError(f"unsupported action kind {kind}")
+    if not isinstance(draft, dict):
+        raise ValueError("draft must be an object")
+    inv = _owned(conn, tenant_id, invoice_id)
+    row = conn.cursor(row_factory=dict_row).execute(
+        "INSERT INTO action_request (tenant_id, invoice_id, kind, draft, status, proposed_by, "
+        "expires_at) VALUES (%s,%s,%s,%s::jsonb,'proposed',%s,%s) RETURNING *, "
+        "expires_at::date AS deadline", (tenant_id, inv, kind, json.dumps(draft), actor, deadline)).fetchone()
+    return _action(row)
 
 
 def propose_settlement_offer(conn, tenant_id, invoice_id, as_of: date, actor: str) -> dict:
@@ -366,11 +406,30 @@ def propose_settlement_offer(conn, tenant_id, invoice_id, as_of: date, actor: st
     return _action(new)
 
 
-def list_actions(conn, tenant_id, status: str | None) -> list[dict]:
+def list_actions(conn, tenant_id, status: str | None, role: str | None = None,
+                 supplier_id: str | None = None) -> list[dict]:
+    """One queue across kinds, soonest deadline first (the action's own, else the invoice's due
+    date). With a role, only the items that role may act on (a supplier: its own invoices)."""
     rows = conn.cursor(row_factory=dict_row).execute(
-        "SELECT * FROM action_request WHERE tenant_id=%s AND (%s::text IS NULL OR status=%s) "
-        "ORDER BY id", (tenant_id, status, status)).fetchall()
-    return [_action(r) for r in rows]
+        "SELECT a.*, COALESCE(a.expires_at::date, i.due_date) AS deadline, i.supplier_id::text AS sup "
+        "FROM action_request a JOIN invoice i ON i.id=a.invoice_id "
+        "WHERE a.tenant_id=%s AND (%s::text IS NULL OR a.status=%s) "
+        "ORDER BY COALESCE(a.expires_at::date, i.due_date) NULLS LAST, a.id",
+        (tenant_id, status, status)).fetchall()
+    out = []
+    for r in rows:
+        if role and (not any(role in s for s in slots(r["kind"], r["lender_consent_required"]))
+                     or (role == "supplier" and r["sup"] != supplier_id)):
+            continue
+        a = _action(r)
+        ids = (r["draft"] or {}).get("document_ids") or [x[0] for x in conn.execute(
+            "SELECT DISTINCT source_ref->>'document_id' FROM evidence_item WHERE invoice_id=%s "
+            "AND source_ref ? 'document_id'", (r["invoice_id"],))]
+        a["documents"] = [{"id": x[0], "doc_type": x[1]} for x in conn.execute(
+            "SELECT id::text, doc_type FROM document WHERE tenant_id=%s AND id::text = ANY(%s)",
+            (tenant_id, ids))]
+        out.append(a)
+    return out
 
 
 def decide_action(conn, tenant_id, action_id, user_id: str, approve: bool, reason: str | None = None):
