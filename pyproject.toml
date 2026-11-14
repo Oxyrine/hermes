@@ -5,6 +5,7 @@ description = "Evidence, pricing and servicing layer between MSME suppliers and 
 requires-python = ">=3.12"
 dependencies = [
     "fpdf2>=2.9.0",
+    "reportlab>=5.1.0",
 ]
 
 [dependency-groups]
