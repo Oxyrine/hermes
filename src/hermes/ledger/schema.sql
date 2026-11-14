@@ -10,7 +10,8 @@ CREATE TABLE app_user (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, email TEXT NOT NULL UNIQUE,
   role TEXT NOT NULL CHECK (role IN ('lender_ops','lender_approver','supplier','hermes_ops','agent')),
   supplier_id UUID,   -- set for supplier users: the only supplier whose invoices they may see
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((role = 'supplier') = (supplier_id IS NOT NULL)));   -- an unscoped supplier cannot exist
 
 CREATE TABLE supplier (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, gstin CHAR(15) NOT NULL UNIQUE,

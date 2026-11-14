@@ -130,3 +130,17 @@ def test_supplier_cannot_touch_another_suppliers_item(client, db, who, inv):
     other = login(client, "s@other.example")
     assert queue(client, other) == []
     assert post(client, other, a, "approve").status_code == 404
+
+
+def test_a_supplier_login_without_a_supplier_cannot_exist(db):
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute("INSERT INTO app_user (tenant_id, email, role) SELECT tenant_id, 'x@y.example', "
+                   "'supplier' FROM app_user LIMIT 1")
+
+
+def test_lender_sees_an_approved_offer_in_the_timeline_as_information(client, who, inv):
+    a = propose(client, who, inv, "buyer_note")
+    assert post(client, who["supplier"], a, "approve").status_code == 200
+    events = client.get(f"/v1/invoices/{inv}/timeline", headers=who["lender"]).json()
+    assert any(e.get("event") == "action.approved" and e["payload"]["action_id"] == a["id"]
+               for e in events)
