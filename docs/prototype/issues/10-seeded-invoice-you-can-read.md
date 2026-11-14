@@ -4,7 +4,7 @@
 
 **Blocked by:** 03, 04, 05, 06, 07
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Schema is the product spec's tables (§4) plus the additions in this feature's spec: tenant id on every tenant-scoped table, agent runs, consents, users and roles, raw records, idempotency keys, event queue, model cache, webhook subscriptions and deliveries; nullable invoice link and a supplier link on documents; expiry, reject reason, edit difference and lender-consent fields on action requests; agent session and stored due date on invoices
 - [ ] Money columns are NUMERIC(18,2), rates NUMERIC(9,6), dates are IST dates
