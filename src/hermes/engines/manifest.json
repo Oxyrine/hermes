@@ -1,4 +1,7 @@
 {
+  "eligibility": {
+    "1.0.0": "5749ba4d237f7b7f40a79d49218c71b441738a75b42501d7bbd3cbf1a2905a66"
+  },
   "interest": {
     "1.0.0": "e53a0205ef520174b9c3bb48d1d11428d63eff5757a3536f5e26e88ff8a3a557"
   }
