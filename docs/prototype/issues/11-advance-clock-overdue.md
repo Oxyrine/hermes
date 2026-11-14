@@ -4,7 +4,7 @@
 
 **Blocked by:** 10
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] A state machine holds the full transition table and guards from the product spec (§4), plus manual review to verified and financeable to overdue; it is the only code that changes an invoice's state, and it refuses any transition not in the table
 - [ ] Verified to financeable requires band A–C and eligibility other than `ineligible`
