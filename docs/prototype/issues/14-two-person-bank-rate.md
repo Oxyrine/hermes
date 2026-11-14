@@ -4,13 +4,13 @@
 
 **Blocked by:** 12
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] An entered rate is not used by the interest engine until approved
-- [ ] The person who entered a rate cannot approve it; the database also enforces that the two differ
-- [ ] The entry records a source link
-- [ ] Approval emits a bank-rate-changed event that fans out to every overdue invoice
-- [ ] After the fan-out, each overdue invoice has new interest and collateral runs; invoice states do not change
-- [ ] A rate effective mid-period changes only the rests after its effective date, visible in the recomputed claim
-- [ ] A minimal admin screen lists rates with their status and offers Enter and Approve
-- [ ] A test through the API covers enter, self-approval refused, second-person approval and recompute
+- [x] An entered rate is not used by the interest engine until approved
+- [x] The person who entered a rate cannot approve it; the database also enforces that the two differ
+- [x] The entry records a source link
+- [x] Approval emits a bank-rate-changed event that fans out to every overdue invoice
+- [x] After the fan-out, each overdue invoice has new interest and collateral runs; invoice states do not change
+- [x] A rate effective mid-period changes only the rests after its effective date, visible in the recomputed claim
+- [x] A minimal admin screen lists rates with their status and offers Enter and Approve
+- [x] A test through the API covers enter, self-approval refused, second-person approval and recompute
