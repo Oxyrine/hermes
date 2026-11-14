@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Generation is deterministic: the same seed gives byte-identical output
 - [ ] Per invoice: an invoice PDF with a text layer and a test-signed e-invoice QR; where the scenario calls for them, a purchase order, goods receipt note, challan, contract and Udyam certificate

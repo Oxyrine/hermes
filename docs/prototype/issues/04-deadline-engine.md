@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] No written term: due 15 days after acceptance
 - [ ] Written term of 30 days: due 30 days after acceptance

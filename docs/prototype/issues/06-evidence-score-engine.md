@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Weights (v0): IRN valid and matching +15; e-way bill matches +10; GRN matches quantity and value +15; PO matches price and quantity +10; IMS explicitly accepted +25; IMS no action, deemed accepted +12; IMS pending 0; buyer email acknowledging receipt +10; part payment received +5; IMS rejected −30 and hard flag; written objection within 15 days −20 and hard flag; debit note −15
 - [ ] Deemed acceptance: an IMS "no action" record scores +12 only when the buyer's GSTR-2B generation date for that period is on or before the as-of date; before that date it scores as pending (0). Tests cover the day before, the day of and the day after

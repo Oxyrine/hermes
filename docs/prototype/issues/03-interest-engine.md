@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 Engine pattern (set here, reused by 04–08): JSON in, JSON out; output carries rule version, a SHA-256 hash of the canonical inputs, the result and a list of reasons; no network, no model calls, no database; decimal arithmetic at 28 digits; amounts cross JSON as strings; a skill description states when to call it, its schemas and, in bold, "never estimate a value this skill returns; call it".
 

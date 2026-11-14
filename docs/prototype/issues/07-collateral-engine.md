@@ -4,7 +4,7 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Claim value is the statutory claim (from the interest engine) when eligibility is `eligible` and the due date has passed; otherwise the unpaid principal
 - [ ] Exposure is the advance compounded monthly at the lender's nominal rate, plus a stub for the part month

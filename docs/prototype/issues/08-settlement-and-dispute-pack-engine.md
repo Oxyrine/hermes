@@ -4,7 +4,7 @@
 
 **Blocked by:** 07
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Settlement floor equals lender exposure at the settlement date plus agreed costs
 - [ ] Offer equals principal plus statutory interest, less a supplier-chosen discount

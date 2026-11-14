@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Private repository exists and the first commit is pushed, authored with the owner's identity only (no assistant attribution)
 - [ ] One command installs Python dependencies; one command starts PostgreSQL 16
