@@ -20,7 +20,7 @@ CREATE TABLE supplier (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
 CREATE TABLE consent (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, supplier_id UUID NOT NULL REFERENCES supplier,
-  source TEXT NOT NULL, purpose TEXT NOT NULL, granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  source TEXT NOT NULL, purpose TEXT NOT NULL, granted_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ,   -- the lender is the tenant
   revoked_at TIMESTAMPTZ);
 
 CREATE TABLE udyam_classification (supplier_id UUID NOT NULL REFERENCES supplier,
@@ -59,7 +59,8 @@ CREATE TABLE document (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant,
   invoice_id UUID REFERENCES invoice,        -- nullable: unlinked or supplier-level documents
   supplier_id UUID REFERENCES supplier,
-  doc_type TEXT NOT NULL CHECK (doc_type IN ('invoice','po','grn','challan','contract','email','debit_note','bank_stmt','award')),
+  doc_type TEXT NOT NULL CHECK (doc_type IN ('invoice','po','grn','challan','contract','email','debit_note','bank_stmt','certificate','award')),
+  filename TEXT, content_type TEXT, size_bytes INT, content BYTEA,   -- uploads, stored unchanged
   gcs_uri TEXT, sha256 CHAR(64), extracted JSONB, extraction_model TEXT,
   extraction_confidence NUMERIC(4,3));
 
