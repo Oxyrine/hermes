@@ -147,3 +147,27 @@ CREATE TRIGGER audit_log_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON audi
   FOR EACH STATEMENT EXECUTE FUNCTION refuse_change();
 CREATE TRIGGER ims_event_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON ims_event
   FOR EACH STATEMENT EXECUTE FUNCTION refuse_change();
+
+-- Row-level security: every table with a tenant_id (and tenant itself) only shows the rows of the
+-- tenant named by the per-request setting hermes.tenant; unset means no rows. buyer, bank_rate,
+-- clock and model_cache have no tenant_id and stay global. The API runs as hermes_app, which
+-- owns nothing and cannot bypass the policies; the owner (migrations, dispatcher, dev tools) does.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='hermes_app') THEN
+    CREATE ROLE hermes_app NOLOGIN NOSUPERUSER NOBYPASSRLS;
+  END IF;
+END $$;
+GRANT hermes_app TO CURRENT_USER;
+GRANT USAGE ON SCHEMA public TO hermes_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO hermes_app;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO hermes_app;
+DO $$ DECLARE t text; BEGIN
+  FOR t IN SELECT c.relname FROM pg_class c LEFT JOIN pg_attribute a
+             ON a.attrelid=c.oid AND a.attname='tenant_id'
+           WHERE c.relkind='r' AND c.relnamespace='public'::regnamespace
+             AND (a.attname IS NOT NULL OR c.relname='tenant') LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('CREATE POLICY tenant_isolation ON %I USING (%I = nullif(current_setting(''hermes.tenant'', true), '''')::uuid)',
+                   t, CASE WHEN t='tenant' THEN 'id' ELSE 'tenant_id' END);
+  END LOOP;
+END $$;
