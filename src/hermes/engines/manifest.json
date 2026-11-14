@@ -1,4 +1,7 @@
 {
+  "collateral": {
+    "1.0.0": "12487024108554a9cbc9de9b01938611810037ab084657e24b9e4b57fa545439"
+  },
   "deadline": {
     "1.0.0": "887f5bdc3fd74f8c0da64c8287e8965caf1e6f99e0d6cdd84a2f17df0ae17063"
   },
