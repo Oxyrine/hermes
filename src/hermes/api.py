@@ -15,7 +15,7 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from psycopg.rows import dict_row
 
-from hermes import statement
+from hermes import statement, supplier
 from hermes.ledger import bank_rates, db, onboarding, service, states
 from hermes.ledger.service import NotFound
 
@@ -407,6 +407,11 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
     @app.get("/v1/invoices")
     def invoices(who=Depends(caller), c=Depends(conn)):
         return service.list_invoices(c, who["tenant"], who.get("supplier") if who["role"] == "supplier" else None)
+
+    @app.get("/v1/me/invoices")
+    def my_invoices(as_of: date | None = None, who=Depends(caller), c=Depends(conn)):
+        require(who, "supplier")
+        return supplier.supplier_invoices(c, who["tenant"], who.get("supplier"), as_of or service.today(c))
 
     @app.get("/v1/invoices/{invoice_id}")
     def invoice(invoice_id: str, as_of: date | None = None, who=Depends(caller), c=Depends(conn)):
