@@ -20,6 +20,8 @@ class ScriptedAgent:
          "payment.received": self.payment_received,
          "offer.expired": self.offer_expired,
          "bank_rate.changed": self.bank_rate_changed,
+         "ims.action_changed": self.bank_rate_changed,  # the read re-runs evidence score and collateral
+         "source.record.ingested": lambda e: None,
          "action.approved": lambda e: None,
          "document.ingested": lambda e: None}[event["kind"]](event)  # published for later tickets (extraction) to act on
 

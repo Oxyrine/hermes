@@ -117,11 +117,14 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
     con = cur.execute("SELECT * FROM contract WHERE id=%s AND tenant_id=%s",
                       (inv["contract_id"], tenant_id)).fetchone()
     grn = cur.execute("SELECT extracted FROM document WHERE invoice_id=%s AND tenant_id=%s "
-                      "AND doc_type='grn' ORDER BY id LIMIT 1", (invoice_id, tenant_id)).fetchone()
+                      "AND extracted->>'delivery_date' IS NOT NULL ORDER BY doc_type, id LIMIT 1",
+                      (invoice_id, tenant_id)).fetchone()  # a challan's date first, then the GRN's
     cls = cur.execute("SELECT class FROM udyam_classification WHERE supplier_id=%s AND fy=%s "
                       "AND tenant_id=%s", (sup["id"], fy_of(con["signed_date"]), tenant_id)).fetchone()
-    items = cur.execute("SELECT signal, source_ref FROM evidence_item WHERE invoice_id=%s AND "
+    items = cur.execute("SELECT signal, source_ref, value FROM evidence_item WHERE invoice_id=%s AND "
                         "tenant_id=%s ORDER BY detected_at, id", (invoice_id, tenant_id)).fetchall()
+    last_ims = max((n for n, i in enumerate(items) if i["signal"].startswith("ims_")), default=None)
+    items = [i for n, i in enumerate(items) if not i["signal"].startswith("ims_") or n == last_ims]
     pays = cur.execute("SELECT paid_on, amount FROM payment WHERE invoice_id=%s AND tenant_id=%s "
                        "ORDER BY paid_on", (invoice_id, tenant_id)).fetchall()
     rates = cur.execute("SELECT effective_from, rate FROM bank_rate WHERE approved_by IS NOT NULL "
@@ -143,7 +146,7 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
     dl_in = {"delivery": delivery, "written_days": con["written_payment_days"]}
     dl = run("deadline", dl_in)
     ev = run("evidence", {"as_of": as_of.isoformat(), "signals": [
-        {"type": i["signal"], "source": i["source_ref"]} for i in items]})
+        {"type": i["signal"], "source": i["source_ref"], **(i["value"] or {})} for i in items]})
 
     out = {
         "id": str(invoice_id), "invoice_no": inv["invoice_no"], "total": str(inv["total"]),
@@ -216,6 +219,9 @@ def guard_facts(conn, tenant_id, invoice_id, as_of: date) -> dict:
                             "AND paid_on<=%s", (view["id"], as_of)).fetchone()[0]
     covered = received >= owed
     return {"band": view["evidence"]["band"], "eligibility": view["eligibility"]["status"],
+            "matched": bool(conn.execute(
+                "SELECT 1 FROM evidence_item WHERE invoice_id=%s AND signal='irn_valid_matching'",
+                (view["id"],)).fetchone()),
             "unpaid": unpaid > 0, "covered": covered, "has_advance": has_advance,
             "past_due": due is not None and as_of > due,
             "supplier_consent": bool(conn.execute(

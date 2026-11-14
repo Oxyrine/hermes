@@ -18,7 +18,7 @@ UDYAM = re.compile(r"^UDYAM-[A-Z]{2}-\d{2}-\d{7}$")
 FY = re.compile(r"^(\d{4})-(\d{2})$")
 ENTERPRISE_TYPES = ("manufacturing", "services", "trading")
 CLASSES = ("micro", "small", "medium")
-SOURCES = ("ims_supplier_view", "gstr1", "einvoice", "bank_statement", "email")
+SOURCES = ("ims_supplier_view", "gstr1", "einvoice", "ewb", "bank_statement", "documents", "email")
 PURPOSES = ("underwriting", "servicing", "dispute_resolution")
 DOC_TYPES = ("invoice", "po", "grn", "challan", "contract", "email", "debit_note", "bank_stmt",
              "certificate")

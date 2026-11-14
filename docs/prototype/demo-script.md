@@ -1,6 +1,6 @@
 # Late-buyer demo script (two minutes)
 
-Setup, once: `uv run python -m hermes.ledger.seed` (resets and seeds DATABASE_URL, clock included),
+Setup, once: `uv run python -m hermes.ledger.seed` (resets DATABASE_URL and loads the synthetic set: 3 suppliers, 4 buyers, 30 invoices; the story invoice is the first late-buyer one, S1/26-27/0010, so the figures below differ from the old hand-seeded Rs 1000000.00 invoice; log in as supplier@kaveri.example to approve),
 `HERMES_ENV=development uv run uvicorn hermes.api:app`, `cd web && npm run dev`, open :3000.
 Replay any time by running the seed command again. `uv run python -m hermes.demo` plays the whole
 story from a fresh reset without the browser; its output is stored in `walkthrough.txt`.

@@ -24,6 +24,12 @@ CREATE TABLE consent (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   source TEXT NOT NULL, purpose TEXT NOT NULL, granted_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ,   -- the lender is the tenant
   revoked_at TIMESTAMPTZ);
 
+CREATE TABLE raw_record (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),   -- append-only: payloads as the adapters fetched them
+  tenant_id UUID NOT NULL REFERENCES tenant, source TEXT NOT NULL, payload JSONB NOT NULL,
+  sha256 CHAR(64) NOT NULL, fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  supplier_id UUID REFERENCES supplier, external_id TEXT, consent_id UUID REFERENCES consent,
+  UNIQUE (tenant_id, source, sha256));   -- a re-pull of the same record changes nothing
+
 CREATE TABLE udyam_classification (supplier_id UUID NOT NULL REFERENCES supplier,
   tenant_id UUID NOT NULL REFERENCES tenant, fy TEXT NOT NULL,
   class TEXT NOT NULL CHECK (class IN ('micro','small','medium')), source_doc UUID,
@@ -63,7 +69,7 @@ CREATE TABLE document (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   doc_type TEXT NOT NULL CHECK (doc_type IN ('invoice','po','grn','challan','contract','email','debit_note','bank_stmt','certificate','award')),
   filename TEXT, content_type TEXT, size_bytes INT, content BYTEA,   -- uploads, stored unchanged
   gcs_uri TEXT, sha256 CHAR(64), extracted JSONB, extraction_model TEXT,
-  extraction_confidence NUMERIC(4,3));
+  extraction_confidence NUMERIC(4,3), raw_id UUID REFERENCES raw_record);
 
 CREATE TABLE ims_event (id BIGSERIAL PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES tenant,
   invoice_id UUID NOT NULL REFERENCES invoice,
@@ -76,7 +82,8 @@ CREATE TABLE evidence_item (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
 CREATE TABLE payment (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, invoice_id UUID NOT NULL REFERENCES invoice,
-  amount NUMERIC(18,2) NOT NULL, paid_on DATE NOT NULL, utr TEXT, source TEXT);
+  amount NUMERIC(18,2) NOT NULL, paid_on DATE NOT NULL, utr TEXT, source TEXT,
+  raw_id UUID REFERENCES raw_record);   -- the bank record this receipt came from
 
 CREATE TABLE bank_rate (effective_from DATE PRIMARY KEY, rate NUMERIC(9,6) NOT NULL,
   source_url TEXT NOT NULL, entered_by UUID REFERENCES app_user, approved_by UUID REFERENCES app_user,
@@ -113,10 +120,6 @@ CREATE TABLE audit_log (id BIGSERIAL PRIMARY KEY, tenant_id UUID REFERENCES tena
   at TIMESTAMPTZ NOT NULL DEFAULT now(), actor TEXT, action TEXT NOT NULL, object_type TEXT,
   object_id UUID, before JSONB, after JSONB);   -- append-only
 
-CREATE TABLE raw_record (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id UUID NOT NULL REFERENCES tenant, source TEXT NOT NULL, payload JSONB NOT NULL,
-  sha256 CHAR(64) NOT NULL, fetched_at TIMESTAMPTZ NOT NULL DEFAULT now());
-
 CREATE TABLE idempotency_key (tenant_id UUID NOT NULL REFERENCES tenant, key TEXT NOT NULL,
   request_hash CHAR(64) NOT NULL, response JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, key));
@@ -145,10 +148,12 @@ CREATE TABLE waterfall (invoice_id UUID PRIMARY KEY REFERENCES invoice,
   lender_exposure NUMERIC(18,2) NOT NULL, costs NUMERIC(18,2) NOT NULL, supplier NUMERIC(18,2) NOT NULL,
   rule_version TEXT NOT NULL, input_hash CHAR(64) NOT NULL);   -- the collateral engine's receipts split
 
--- The audit log and IMS events are append-only, enforced here and not in application code.
+-- The audit log, IMS events and raw records are append-only, enforced here and not in application code.
 CREATE FUNCTION refuse_change() RETURNS trigger LANGUAGE plpgsql AS
   $$ BEGIN RAISE EXCEPTION '% is append-only', TG_TABLE_NAME; END $$;
 CREATE TRIGGER audit_log_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON audit_log
+  FOR EACH STATEMENT EXECUTE FUNCTION refuse_change();
+CREATE TRIGGER raw_record_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON raw_record
   FOR EACH STATEMENT EXECUTE FUNCTION refuse_change();
 CREATE TRIGGER ims_event_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON ims_event
   FOR EACH STATEMENT EXECUTE FUNCTION refuse_change();

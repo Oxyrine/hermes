@@ -1,7 +1,6 @@
-"""Hand-seeded world for the first slice: one lender, one supplier, one buyer, one verified invoice.
-
-`python -m hermes.ledger.seed` resets the database named by DATABASE_URL and seeds it
-(development only).
+"""Seeding. `run` is the hand-seeded slice the tests start from (one lender, one supplier, one
+buyer, one verified invoice). `python -m hermes.ledger.seed` resets the database named by
+DATABASE_URL and loads the synthetic set instead (development only; see ledger/load.py).
 """
 
 import json
@@ -25,7 +24,8 @@ def _gstin(first14: str) -> str:
     return first14 + gstin_checksum(first14)
 
 
-def run(conn: psycopg.Connection) -> dict:
+def base(conn: psycopg.Connection) -> tuple:
+    """The lender, its staff and the approved bank rates: what both worlds start from."""
     def one(sql, *args):
         return conn.execute(sql, args).fetchone()[0]
 
@@ -43,7 +43,14 @@ def run(conn: psycopg.Connection) -> dict:
         conn.execute("INSERT INTO bank_rate (effective_from, rate, source_url, entered_by, "
                      "approved_by) VALUES (%s,%s,%s,%s,%s)",
                      (d, rate, url, users["lender_ops"], users["lender_approver"]))
+    return tenant, users
 
+
+def run(conn: psycopg.Connection) -> dict:
+    def one(sql, *args):
+        return conn.execute(sql, args).fetchone()[0]
+
+    tenant, users = base(conn)
     supplier = one(
         "INSERT INTO supplier (tenant_id, gstin, legal_name, udyam_urn, udyam_reg_date, "
         "enterprise_type, onboarded_at) VALUES (%s,%s,'Sundaram Fabrication Works (synthetic)',"
@@ -93,8 +100,10 @@ def run(conn: psycopg.Connection) -> dict:
 
 
 if __name__ == "__main__":
-    from hermes.ledger import db
+    from hermes.ledger import db, load
+    from hermes.synthetic import generate
 
+    generate("storage/synthetic")
     with psycopg.connect(db.database_url(), autocommit=True) as c:
         db.reset(c)
-        print(run(c))
+        print(load.run(c, "storage/synthetic"))
