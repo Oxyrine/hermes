@@ -15,7 +15,8 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from psycopg.rows import dict_row
 
-from hermes.ledger import db, service, states
+from hermes.ledger import db, onboarding, service, states
+from hermes.ledger.service import NotFound
 
 TOKEN_TTL_SECONDS = 8 * 3600
 OBJECT = re.compile(r"^/v1/(invoices|actions)/([0-9a-fA-F-]{36})(/|$)")
@@ -157,6 +158,47 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
                 raise HTTPException(404, "invoice not found") from None
             except (ValueError, KeyError, TypeError, ArithmeticError) as e:
                 raise HTTPException(422, f"bad payment: {e}") from None
+
+    def refuse(fn, *a):
+        """Run a validated write; ValueError -> 422, duplicate -> 409, unknown object -> 404."""
+        try:
+            return fn(*a)
+        except NotFound as e:
+            raise HTTPException(404, f"{e} not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    @app.post("/v1/suppliers")
+    def onboard(body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops")
+        return refuse(onboarding.onboard_supplier, c, who["tenant"], body)
+
+    def mine(who):
+        """A supplier user is pinned to their own supplier; lender staff are not."""
+        return who.get("supplier") if who["role"] == "supplier" else None
+
+    @app.post("/v1/suppliers/{supplier_id}/consents")
+    def consent(supplier_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        require(who, "supplier")
+        return refuse(onboarding.record_consent, c, who["tenant"], supplier_id, body, mine(who))
+
+    @app.get("/v1/suppliers/{supplier_id}/consents")
+    def consents(supplier_id: str, who=Depends(caller), c=Depends(conn)):
+        require(who, "supplier", "lender_ops", "lender_approver", "hermes_ops")
+        return refuse(onboarding.list_consents, c, who["tenant"], supplier_id, mine(who))
+
+    @app.post("/v1/suppliers/{supplier_id}/consents/{consent_id}/withdraw")
+    def withdraw(supplier_id: str, consent_id: str, who=Depends(caller), c=Depends(conn)):
+        require(who, "supplier")
+        return refuse(onboarding.withdraw_consent, c, who["tenant"], supplier_id, consent_id,
+                      mine(who))
+
+    @app.post("/v1/invoices")
+    def create_invoice(body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        require(who, "supplier", "lender_ops")
+        return refuse(onboarding.create_invoice, c, who["tenant"], body, mine(who))
 
     @app.post("/v1/invoices/{invoice_id}/waterfall")
     def waterfall(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
