@@ -1,0 +1,22 @@
+{
+  "version": "1.0.0",
+  "weights": {
+    "irn_valid_matching": {"points": 15, "hard_flag": false},
+    "ewb_matching": {"points": 10, "hard_flag": false},
+    "grn_matching": {"points": 15, "hard_flag": false},
+    "po_matching": {"points": 10, "hard_flag": false},
+    "ims_accepted": {"points": 25, "hard_flag": false},
+    "ims_no_action": {"points": 12, "hard_flag": false},
+    "ims_pending": {"points": 0, "hard_flag": false},
+    "buyer_email_ack": {"points": 10, "hard_flag": false},
+    "part_payment": {"points": 5, "hard_flag": false},
+    "ims_rejected": {"points": -30, "hard_flag": true},
+    "written_objection_15d": {"points": -20, "hard_flag": true},
+    "debit_note": {"points": -15, "hard_flag": false}
+  },
+  "bands": [["A", 80], ["B", 60], ["C", 40], ["D", 0]],
+  "reasons": [
+    "Weights are v0 hypotheses to be calibrated in the pilot.",
+    "Awaiting legal review: IMS no action counts as deemed acceptance only once the buyer's GSTR-2B for the period has been generated on or before the as-of date; before that it scores as pending."
+  ]
+}
