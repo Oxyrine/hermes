@@ -1,0 +1,15 @@
+{
+  "version": "1.0.0",
+  "policy": {
+    "name": "lender-policy-v0",
+    "advance_rate": {"A": "0.80", "B": "0.70", "C": "0.50", "D": "0"},
+    "ltv_alert_margin": "0.05",
+    "cushion_rate_multiple": "3"
+  },
+  "reasons": [
+    "Lender policy v0: advance rate by evidence band A 80%, B 70%, C 50%, D 0%; the band's advance rate is also its loan-to-value limit.",
+    "Awaiting legal review: the claim is the statutory claim only when eligibility is eligible and the due date has passed, otherwise the unpaid principal.",
+    "Awaiting legal review: exposure compounds monthly at the lender's nominal rate from the funding date, plus simple interest (365-day basis) for the part month.",
+    "Waterfall: receipts pay the lender's exposure, then agreed costs; everything else, including all statutory interest, goes to the supplier; no interest-linked fee."
+  ]
+}
