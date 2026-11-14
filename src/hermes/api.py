@@ -15,9 +15,11 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from psycopg.rows import dict_row
 
+from hermes import statement
 from hermes.ledger import bank_rates, db, service, states
 
 TOKEN_TTL_SECONDS = 8 * 3600
+NOINDEX = {"X-Robots-Tag": "noindex, nofollow"}
 OBJECT = re.compile(r"^/v1/(invoices|actions)/([0-9a-fA-F-]{36})(/|$)")
 TABLES = {"invoices": ("invoice", "invoice"), "actions": ("action_request", "action")}
 
@@ -231,7 +233,11 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
     def decide(action_id, who, c, approve, reason=None):
         require(who, "lender_approver")
         try:
-            return service.decide_action(c, who["tenant"], action_id, who["sub"], approve, reason)
+            out = service.decide_action(c, who["tenant"], action_id, who["sub"], approve, reason)
+            if approve and out["kind"] == "settlement_offer":  # the offer goes with a signed link
+                out["buyer_link"] = "/public/statement/" + statement.make_token(
+                    secret, who["tenant"], out["invoice_id"])
+            return out
         except service.NotFound:
             raise HTTPException(404, "action not found") from None
         except states.Refused as e:
@@ -336,6 +342,24 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
             raise HTTPException(404, "engine or invoice not found") from None
         except (ValueError, KeyError, TypeError) as e:
             raise HTTPException(422, f"engine rejected inputs: {e}") from None
+
+    @app.get("/public/statement/{token}")
+    def buyer_statement(token: str, response: Response, c=Depends(conn)):
+        response.headers.update(NOINDEX)
+        try:
+            return statement.statement(c, secret, token)
+        except statement.Refused:
+            raise HTTPException(404, "This link is not valid.", headers=NOINDEX) from None
+
+    @app.post("/public/statement/{token}/respond")
+    def buyer_respond(token: str, response: Response, body: dict = Body(...), c=Depends(conn)):
+        response.headers.update(NOINDEX)
+        try:
+            return statement.respond(c, secret, token, body.get("choice"), body.get("note"))
+        except statement.Refused:
+            raise HTTPException(404, "This link is not valid.", headers=NOINDEX) from None
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
 
     return app
 
