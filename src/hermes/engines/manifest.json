@@ -1,4 +1,7 @@
 {
+  "deadline": {
+    "1.0.0": "887f5bdc3fd74f8c0da64c8287e8965caf1e6f99e0d6cdd84a2f17df0ae17063"
+  },
   "eligibility": {
     "1.0.0": "5749ba4d237f7b7f40a79d49218c71b441738a75b42501d7bbd3cbf1a2905a66"
   },
