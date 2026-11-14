@@ -15,10 +15,12 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from psycopg.rows import dict_row
 
-from hermes.ledger import db, onboarding, service, states
+from hermes import statement
+from hermes.ledger import bank_rates, db, onboarding, service, states
 from hermes.ledger.service import NotFound
 
 TOKEN_TTL_SECONDS = 8 * 3600
+NOINDEX = {"X-Robots-Tag": "noindex, nofollow"}
 OBJECT = re.compile(r"^/v1/(invoices|actions)/([0-9a-fA-F-]{36})(/|$)")
 TABLES = {"invoices": ("invoice", "invoice"), "actions": ("action_request", "action")}
 
@@ -258,11 +260,13 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
     def propose(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
         require(who, "agent", "hermes_ops")
         try:
-            if body.get("kind") != "settlement_offer":
-                raise ValueError("only settlement_offer is supported")
+            proposers = {"settlement_offer": service.propose_settlement_offer,
+                         "odr_pack": service.propose_dispute_pack}
+            if body.get("kind") not in proposers:
+                raise ValueError("only settlement_offer and odr_pack are supported")
             as_of = date.fromisoformat(body["as_of"]) if body.get("as_of") else service.today(c)
-            return service.propose_settlement_offer(c, who["tenant"], invoice_id, as_of,
-                                                    f"{who['role']}:{who['sub']}")
+            return proposers[body["kind"]](c, who["tenant"], invoice_id, as_of,
+                                           f"{who['role']}:{who['sub']}")
         except service.NotFound:
             raise HTTPException(404, "invoice not found") from None
         except states.Refused as e:
@@ -270,10 +274,51 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
         except (ValueError, KeyError, TypeError) as e:
             raise HTTPException(422, f"bad request: {e}") from None
 
-    def decide(action_id, who, c, approve, reason=None):
-        require(who, "lender_approver")
+    def person_step(who, c, invoice_id, call, *args):
+        """Steps a named person takes after acting outside Hermes (filing, an award, a refusal)."""
+        require(who, "lender_ops", "hermes_ops")
         try:
-            return service.decide_action(c, who["tenant"], action_id, who["sub"], approve, reason)
+            call(c, who["tenant"], invoice_id, *args, service.today(c), f"user:{who['sub']}")
+            return {"state": c.execute("SELECT state FROM invoice WHERE id=%s",
+                                       (invoice_id,)).fetchone()[0]}
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(422, f"bad request: {e}") from None
+
+    @app.post("/v1/invoices/{invoice_id}/case-number")
+    def case_number(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        return person_step(who, c, invoice_id, service.record_case_number, body.get("case_number"))
+
+    @app.post("/v1/invoices/{invoice_id}/award")
+    def award(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        return person_step(who, c, invoice_id, service.record_award, body.get("filename"),
+                           body.get("content_base64"))
+
+    @app.post("/v1/invoices/{invoice_id}/offer-refused")
+    def offer_refused(invoice_id: str, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "hermes_ops")
+        try:
+            service.refuse_offer(c, who["tenant"], invoice_id, f"user:{who['sub']}", service.today(c))
+            return {"status": "refused"}
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+
+    def decide(action_id, who, c, approve, reason=None):
+        require(who, "lender_approver", "supplier")  # which of the two, by kind, is the service's call
+        try:
+            out = service.decide_action(c, who["tenant"], action_id, who["sub"], who["role"],
+                                        approve, reason)
+            if approve and out["kind"] == "settlement_offer":  # the offer goes with a signed link
+                out["buyer_link"] = "/public/statement/" + statement.make_token(
+                    secret, who["tenant"], out["invoice_id"])
+            return out
+        except PermissionError as e:
+            raise HTTPException(403, str(e)) from None
         except service.NotFound:
             raise HTTPException(404, "action not found") from None
         except states.Refused as e:
@@ -287,10 +332,29 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
     def reject(action_id: str, body: dict = Body(default={}), who=Depends(caller), c=Depends(conn)):
         return decide(action_id, who, c, False, body.get("reason"))
 
+    @app.get("/v1/actions/{action_id}/pack.{fmt}")
+    def pack(action_id: str, fmt: str, who=Depends(caller), c=Depends(conn)):
+        """Download the dispute pack (JSON or PDF) from its approval item. Read-only."""
+        from fastapi.responses import Response
+
+        from hermes.engines.settlement.pdf import render_pdf
+
+        if fmt not in ("json", "pdf"):
+            raise HTTPException(404, "pack formats are json and pdf")
+        try:
+            body, render = service.dispute_pack(c, who["tenant"], action_id)
+        except service.NotFound:
+            raise HTTPException(404, "dispute pack not found") from None
+        if fmt == "json":
+            return body
+        return Response(render_pdf(render), media_type="application/pdf",
+                        headers={"content-disposition": 'attachment; filename="dispute-pack.pdf"'})
+
     @app.get("/v1/actions")
     def actions(status: str | None = None, who=Depends(caller), c=Depends(conn)):
-        require(who, "lender_ops", "lender_approver", "hermes_ops")
-        return service.list_actions(c, who["tenant"], status)
+        require(who, "lender_ops", "lender_approver", "hermes_ops", "supplier")
+        return service.list_actions(c, who["tenant"], status,
+                                    who.get("supplier") if who["role"] == "supplier" else None)
 
     @app.get("/v1/invoices/{invoice_id}/timeline")
     def timeline(invoice_id: str, who=Depends(caller), c=Depends(conn)):
@@ -319,6 +383,32 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
             return service.invoice_view(c, who["tenant"], invoice_id, as_of or service.today(c))
         except service.NotFound:
             raise HTTPException(404, "invoice not found") from None
+
+    @app.get("/v1/admin/bank-rates")
+    def rates(who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "hermes_ops")
+        return bank_rates.list_rates(c)
+
+    @app.post("/v1/admin/bank-rates")
+    def enter_rate(body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "hermes_ops")
+        try:
+            return bank_rates.enter(c, who["sub"], date.fromisoformat(body["effective_from"]),
+                                    str(body["rate"]), body["source_url"])
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+        except (ValueError, KeyError, TypeError, ArithmeticError) as e:
+            raise HTTPException(422, f"bad rate: {e}") from None
+
+    @app.post("/v1/admin/bank-rates/{effective_from}/approve")
+    def approve_rate(effective_from: date, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "hermes_ops")
+        try:
+            return bank_rates.approve(c, who["sub"], effective_from)
+        except service.NotFound:
+            raise HTTPException(404, "rate not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
 
     @app.get("/v1/invoices/{invoice_id}/receipts")
     def receipts(invoice_id: str, who=Depends(caller), c=Depends(conn)):
@@ -352,6 +442,24 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
             raise HTTPException(404, "engine or invoice not found") from None
         except (ValueError, KeyError, TypeError) as e:
             raise HTTPException(422, f"engine rejected inputs: {e}") from None
+
+    @app.get("/public/statement/{token}")
+    def buyer_statement(token: str, response: Response, c=Depends(conn)):
+        response.headers.update(NOINDEX)
+        try:
+            return statement.statement(c, secret, token)
+        except statement.Refused:
+            raise HTTPException(404, "This link is not valid.", headers=NOINDEX) from None
+
+    @app.post("/public/statement/{token}/respond")
+    def buyer_respond(token: str, response: Response, body: dict = Body(...), c=Depends(conn)):
+        response.headers.update(NOINDEX)
+        try:
+            return statement.respond(c, secret, token, body.get("choice"), body.get("note"))
+        except statement.Refused:
+            raise HTTPException(404, "This link is not valid.", headers=NOINDEX) from None
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
 
     return app
 

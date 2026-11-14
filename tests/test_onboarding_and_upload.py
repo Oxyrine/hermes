@@ -1,6 +1,5 @@
 """Ticket 15: onboarding, consent, invoice creation and document upload through the API."""
 
-import hashlib
 
 import psycopg
 import pytest
@@ -8,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from hermes.api import create_app
 from hermes.synthetic.gstin import gstin_checksum
-from test_seeded_invoice_api import SECRET, login, seeded_invoice_id
+from test_seeded_invoice_api import SECRET, login
 
 PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 

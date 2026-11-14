@@ -52,13 +52,14 @@ CREATE TABLE invoice (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   state TEXT NOT NULL, state_changed_at TIMESTAMPTZ,
   due_date DATE,                     -- stored due date, written from the deadline engine
   agent_session TEXT,
+  case_number TEXT,                  -- dispute case number, entered by the person who filed
   UNIQUE (supplier_id, invoice_no));
 
 CREATE TABLE document (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant,
   invoice_id UUID REFERENCES invoice,        -- nullable: unlinked or supplier-level documents
   supplier_id UUID REFERENCES supplier,
-  doc_type TEXT NOT NULL CHECK (doc_type IN ('invoice','po','grn','challan','contract','email','debit_note','bank_stmt','certificate')),
+  doc_type TEXT NOT NULL CHECK (doc_type IN ('invoice','po','grn','challan','contract','email','debit_note','bank_stmt','certificate','award')),
   filename TEXT, content_type TEXT, size_bytes INT, content BYTEA,   -- uploads, stored unchanged
   gcs_uri TEXT, sha256 CHAR(64), extracted JSONB, extraction_model TEXT,
   extraction_confidence NUMERIC(4,3));

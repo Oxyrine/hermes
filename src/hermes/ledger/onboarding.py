@@ -1,7 +1,6 @@
 """Onboarding, consent, invoice creation and document upload. Every input is validated here and
 refused with a message a person can act on (ValueError -> 422, states.Refused -> 409)."""
 
-import hashlib
 import re
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -54,8 +53,10 @@ def _money(v, label: str, required: bool = True) -> Decimal | None:
     if v is None and not required:
         return None
     try:
-        d = Decimal(v) if isinstance(v, str) else None
-        if d is None or not d.is_finite() or d.as_tuple().exponent < -2 or d <= 0 or d >= 10**16:
+        if not isinstance(v, str) or not re.fullmatch(r"\d{1,16}(\.\d{1,2})?", v.strip()):
+            raise InvalidOperation  # plain digits only: no exponents, signs, NaN
+        d = Decimal(v)
+        if d <= 0:
             raise InvalidOperation
     except InvalidOperation:
         raise ValueError(f"{label} must be a positive amount in rupees with at most 2 decimals, "
