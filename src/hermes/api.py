@@ -2,18 +2,24 @@
 is filtered by that tenant. `create_app(dsn, secret, env)`; `app` is built from the environment
 for uvicorn (HERMES_ENV defaults to production, so the development login is opt-in)."""
 
+import hashlib
+import json
 import os
+import re
 import time
 from datetime import date
 
 import jwt
 import psycopg
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 from psycopg.rows import dict_row
 
 from hermes.ledger import db, service, states
 
 TOKEN_TTL_SECONDS = 8 * 3600
+OBJECT = re.compile(r"^/v1/(invoices|actions)/([0-9a-fA-F-]{36})(/|$)")
+TABLES = {"invoices": ("invoice", "invoice"), "actions": ("action_request", "action")}
 
 
 def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
@@ -33,18 +39,81 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
             raise HTTPException(401, "invalid or missing token") from None
         return claims
 
+    def snapshot(c, tenant, path):
+        """(object type, id, row as JSON) of the invoice or action a path names, else Nones."""
+        m = OBJECT.match(path)
+        if not m:
+            return None, None, None
+        table, kind = TABLES[m[1]]
+        try:
+            row = c.execute(f"SELECT to_jsonb(t) FROM {table} t WHERE id=%s AND tenant_id=%s",
+                            (m[2], tenant)).fetchone()
+        except psycopg.Error:
+            return None, None, None
+        return kind, m[2], row and row[0]
+
+    # ponytail: sync psycopg inside async middleware blocks the loop; fine for the prototype.
+    @app.middleware("http")
+    async def audit_and_replay(request: Request, call_next):
+        """Every write: replay a repeated Idempotency-Key, else run it and add one audit row."""
+        path = request.url.path
+        if request.method == "GET" or not path.startswith(("/v1/", "/dev/payments")):
+            return await call_next(request)
+        try:
+            who = caller(request.headers.get("authorization"))
+        except HTTPException:
+            return await call_next(request)  # the route answers 401
+        key = request.headers.get("idempotency-key")
+        body = await request.body()
+        digest = hashlib.sha256(
+            f"{who['sub']} {request.method} {path} ".encode() + body).hexdigest()
+        with psycopg.connect(dsn, autocommit=True) as c:
+            if key and not c.execute(
+                    "INSERT INTO idempotency_key (tenant_id, key, request_hash) VALUES (%s,%s,%s) "
+                    "ON CONFLICT DO NOTHING RETURNING 1", (who["tenant"], key, digest)).fetchone():
+                h, first = c.execute("SELECT request_hash, response FROM idempotency_key "
+                                     "WHERE tenant_id=%s AND key=%s", (who["tenant"], key)).fetchone()
+                if h != digest:
+                    return JSONResponse({"detail": "Idempotency-Key reused with a different request"}, 422)
+                if first is None:
+                    return JSONResponse({"detail": "request with this key is still in progress"}, 409)
+                return JSONResponse(first["body"], first["status"])
+            kind, oid, before = snapshot(c, who["tenant"], path)
+            response = await call_next(request)
+            raw = b"".join([chunk async for chunk in response.body_iterator])
+            ok = response.status_code < 300
+            payload = json.loads(raw) if raw else None
+            if ok:
+                _, _, after = snapshot(c, who["tenant"], path)
+                c.execute(
+                    "INSERT INTO audit_log (tenant_id, actor, action, object_type, object_id, "
+                    "before, after) VALUES (%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)",
+                    (who["tenant"], f"{who['role']}:{who['sub']}",
+                     f"{request.method} {OBJECT.sub(lambda m: '/v1/' + m[1] + '/{id}' + m[3], path, 1)}",
+                     kind, oid, json.dumps(before), json.dumps(after if after is not None else payload)))
+            if key and ok:
+                c.execute("UPDATE idempotency_key SET response=%s::jsonb WHERE tenant_id=%s AND key=%s",
+                          (json.dumps({"status": response.status_code, "body": payload}),
+                           who["tenant"], key))
+            elif key:  # failed writes can be retried under the same key
+                c.execute("DELETE FROM idempotency_key WHERE tenant_id=%s AND key=%s",
+                          (who["tenant"], key))
+        headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+        return Response(raw, response.status_code, headers, response.media_type)
+
     if env == "development":  # the development login exists only here
 
         @app.post("/dev/login")
         def dev_login(body: dict = Body(...), c=Depends(conn)):
             row = c.cursor(row_factory=dict_row).execute(
-                "SELECT id::text, tenant_id::text, role FROM app_user WHERE email=%s",
+                "SELECT id::text, tenant_id::text, role, supplier_id::text AS supplier FROM app_user "
+                "WHERE email=%s",
                 (body.get("email"),)).fetchone()
             if row is None:
                 raise HTTPException(404, "unknown seeded user")
             token = jwt.encode(
                 {"sub": row["id"], "tenant": row["tenant_id"], "role": row["role"],
-                 "exp": int(time.time()) + TOKEN_TTL_SECONDS}, secret, algorithm="HS256")
+                 "supplier": row["supplier"], "exp": int(time.time()) + TOKEN_TTL_SECONDS}, secret, algorithm="HS256")
             return {"token": token, "role": row["role"]}
 
     if env == "development":  # the clock exists only here
@@ -62,6 +131,18 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
     def require(who, *roles):
         if who["role"] not in roles:
             raise HTTPException(403, "role not permitted")
+
+    def own(c, who, invoice_id):
+        """A supplier user sees only their own supplier's invoices; anything else is a 404."""
+        if who["role"] == "supplier" and not c.execute(
+                "SELECT 1 FROM invoice WHERE id::text=%s AND tenant_id::text=%s AND supplier_id::text=%s",
+                (invoice_id, who["tenant"], who.get("supplier"))).fetchone():
+            raise HTTPException(404, "invoice not found")
+
+    def audit_read(c, who, what, invoice_id):
+        c.execute("INSERT INTO audit_log (tenant_id, actor, action, object_type, object_id) "
+                  "VALUES (%s,%s,%s,'invoice',%s)",
+                  (who["tenant"], f"{who['role']}:{who['sub']}", f"read:{what}", invoice_id))
 
     if env == "development":  # receipts are entered by hand; no payment rail exists yet
 
@@ -166,10 +247,12 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
 
     @app.get("/v1/actions")
     def actions(status: str | None = None, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "lender_approver", "hermes_ops")
         return service.list_actions(c, who["tenant"], status)
 
     @app.get("/v1/invoices/{invoice_id}/timeline")
     def timeline(invoice_id: str, who=Depends(caller), c=Depends(conn)):
+        own(c, who, invoice_id)
         try:
             return service.timeline(c, who["tenant"], invoice_id)
         except service.NotFound:
@@ -177,6 +260,7 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
 
     @app.get("/v1/invoices/{invoice_id}/collateral-series")
     def collateral_series(invoice_id: str, who=Depends(caller), c=Depends(conn)):
+        own(c, who, invoice_id)
         try:
             return service.collateral_series(c, who["tenant"], invoice_id)
         except service.NotFound:
@@ -184,17 +268,41 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
 
     @app.get("/v1/invoices")
     def invoices(who=Depends(caller), c=Depends(conn)):
-        return service.list_invoices(c, who["tenant"])
+        return service.list_invoices(c, who["tenant"], who.get("supplier") if who["role"] == "supplier" else None)
 
     @app.get("/v1/invoices/{invoice_id}")
     def invoice(invoice_id: str, as_of: date | None = None, who=Depends(caller), c=Depends(conn)):
+        own(c, who, invoice_id)
         try:
             return service.invoice_view(c, who["tenant"], invoice_id, as_of or service.today(c))
         except service.NotFound:
             raise HTTPException(404, "invoice not found") from None
 
+    @app.get("/v1/invoices/{invoice_id}/receipts")
+    def receipts(invoice_id: str, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "lender_approver", "hermes_ops", "supplier")
+        own(c, who, invoice_id)
+        try:
+            out = service.receipts(c, who["tenant"], invoice_id)
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+        audit_read(c, who, "receipts", invoice_id)
+        return out
+
+    @app.get("/v1/invoices/{invoice_id}/documents")
+    def documents(invoice_id: str, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "lender_approver", "hermes_ops", "supplier")
+        own(c, who, invoice_id)
+        try:
+            out = service.documents(c, who["tenant"], invoice_id)
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+        audit_read(c, who, "documents", invoice_id)
+        return out
+
     @app.post("/v1/engines/{engine}/run")
     def run_engine(engine: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        require(who, "agent", "hermes_ops")
         try:
             return service.run_engine(c, who["tenant"], body.get("invoice_id"), engine,
                                       body["inputs"])

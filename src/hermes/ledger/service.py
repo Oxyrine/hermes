@@ -62,11 +62,27 @@ def run_engine(conn, tenant_id, invoice_id, engine: str, inputs: dict, *, reuse:
     return out
 
 
-def list_invoices(conn, tenant_id) -> list[dict]:
-    rows = conn.cursor(row_factory=dict_row).execute(
+def list_invoices(conn, tenant_id, supplier_id=None) -> list[dict]:
+    return conn.cursor(row_factory=dict_row).execute(
         "SELECT id::text, invoice_no, total::text, state FROM invoice WHERE tenant_id=%s "
-        "ORDER BY invoice_no", (tenant_id,)).fetchall()
-    return rows
+        "AND (%s::text IS NULL OR supplier_id::text=%s) ORDER BY invoice_no",
+        (tenant_id, supplier_id, supplier_id)).fetchall()
+
+
+def receipts(conn, tenant_id, invoice_id) -> list[dict]:
+    """Bank receipts recorded against an invoice (sensitive: the caller audits the read)."""
+    inv = _owned(conn, tenant_id, invoice_id)
+    return conn.cursor(row_factory=dict_row).execute(
+        "SELECT id::text, amount::text, paid_on::text, utr, source FROM payment "
+        "WHERE invoice_id=%s AND tenant_id=%s ORDER BY paid_on", (inv, tenant_id)).fetchall()
+
+
+def documents(conn, tenant_id, invoice_id) -> list[dict]:
+    """Documents attached to an invoice (sensitive: the caller audits the read)."""
+    inv = _owned(conn, tenant_id, invoice_id)
+    return conn.cursor(row_factory=dict_row).execute(
+        "SELECT id::text, doc_type, extracted FROM document WHERE invoice_id=%s AND tenant_id=%s "
+        "ORDER BY doc_type", (inv, tenant_id)).fetchall()
 
 
 def _section(env: dict, **fields) -> dict:
