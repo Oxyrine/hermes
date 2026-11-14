@@ -49,6 +49,8 @@ def run(conn: psycopg.Connection) -> dict:
         "enterprise_type, onboarded_at) VALUES (%s,%s,'Sundaram Fabrication Works (synthetic)',"
         "'UDYAM-KA-18-0002002','2021-04-01','manufacturing', now()) RETURNING id",
         tenant, _gstin("29AABCS0002A1Z"))
+    conn.execute("INSERT INTO app_user (tenant_id, email, role, supplier_id) "
+                 "VALUES (%s,'supplier@sundaram.example','supplier',%s)", (tenant, supplier))
     conn.execute("INSERT INTO udyam_classification (supplier_id, tenant_id, fy, class) "
                  "VALUES (%s,%s,'2026-27','small')", (supplier, tenant))
     buyer = one("INSERT INTO buyer (gstin, legal_name) VALUES (%s,'Meridian Heavy Engineering "

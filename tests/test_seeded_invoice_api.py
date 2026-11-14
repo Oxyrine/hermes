@@ -111,10 +111,10 @@ def test_other_tenants_user_sees_nothing(client, dsn):
         t = c.execute("INSERT INTO tenant (name, kind) VALUES ('Lender B','nbfc') RETURNING id"
                       ).fetchone()[0]
         c.execute("INSERT INTO app_user (tenant_id, email, role) "
-                  "VALUES (%s,'ops@lender-b.example','lender_ops')", (t,))
+                  "VALUES (%s,'agent@lender-b.example','agent')", (t,))
     mine = login(client)
     invoice_id = seeded_invoice_id(client, mine)
-    theirs = login(client, "ops@lender-b.example")
+    theirs = login(client, "agent@lender-b.example")
     assert client.get("/v1/invoices", headers=theirs).json() == []
     assert client.get(f"/v1/invoices/{invoice_id}", headers=theirs).status_code == 404
     r = client.post("/v1/engines/deadline/run", headers=theirs,
@@ -123,7 +123,7 @@ def test_other_tenants_user_sees_nothing(client, dsn):
 
 
 def test_engine_run_through_api_is_stored(client, dsn):
-    h = login(client)
+    h = login(client, "agent@lender-a.example")
     invoice_id = seeded_invoice_id(client, h)
     inputs = {"delivery": "2026-08-01", "written_days": 45}
     r = client.post("/v1/engines/deadline/run", headers=h,
@@ -140,7 +140,7 @@ def test_engine_run_through_api_is_stored(client, dsn):
 
 
 def test_unknown_engine_is_404(client):
-    h = login(client)
+    h = login(client, "agent@lender-a.example")
     r = client.post("/v1/engines/nope/run", headers=h, json={"inputs": {}})
     assert r.status_code == 404
 

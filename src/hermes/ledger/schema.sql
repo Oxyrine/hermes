@@ -9,6 +9,7 @@ CREATE TABLE tenant (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NO
 CREATE TABLE app_user (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, email TEXT NOT NULL UNIQUE,
   role TEXT NOT NULL CHECK (role IN ('lender_ops','lender_approver','supplier','hermes_ops','agent')),
+  supplier_id UUID,   -- set for supplier users: the only supplier whose invoices they may see
   created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 
 CREATE TABLE supplier (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -138,3 +139,11 @@ CREATE TABLE waterfall (invoice_id UUID PRIMARY KEY REFERENCES invoice,
   tenant_id UUID NOT NULL REFERENCES tenant, as_of DATE NOT NULL, receipts NUMERIC(18,2) NOT NULL,
   lender_exposure NUMERIC(18,2) NOT NULL, costs NUMERIC(18,2) NOT NULL, supplier NUMERIC(18,2) NOT NULL,
   rule_version TEXT NOT NULL, input_hash CHAR(64) NOT NULL);   -- the collateral engine's receipts split
+
+-- The audit log and IMS events are append-only, enforced here and not in application code.
+CREATE FUNCTION refuse_change() RETURNS trigger LANGUAGE plpgsql AS
+  $$ BEGIN RAISE EXCEPTION '% is append-only', TG_TABLE_NAME; END $$;
+CREATE TRIGGER audit_log_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON audit_log
+  FOR EACH STATEMENT EXECUTE FUNCTION refuse_change();
+CREATE TRIGGER ims_event_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON ims_event
+  FOR EACH STATEMENT EXECUTE FUNCTION refuse_change();
