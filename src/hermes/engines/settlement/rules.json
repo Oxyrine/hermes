@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "reasons": [
+    "Awaiting legal review: statutory interest in the offer is the interest engine's claim less the outstanding principal; the supplier's discount is a percentage of that interest only.",
+    "Awaiting legal review: neutral buyer notes state the rule only, with no conclusion on this buyer.",
+    "An offer below the settlement floor is returned marked needs lender consent; it is neither refused nor silently allowed.",
+    "Hermes never sends or submits: the letter and the dispute pack are drafts for a person to approve and file."
+  ],
+  "notes": [
+    "A late payment to a micro or small supplier defers the buyer's tax deduction for the amount until it is paid.",
+    "Challenging an arbitral award requires a pre-deposit of 75% of the awarded amount."
+  ],
+  "letter_template": "Dear {{buyer_name}},\n\nInvoice {{invoice_no}} dated {{invoice_date}} for INR {{principal}} was accepted on {{acceptance_date}} and fell due on {{due_date}}. As at {{as_of}} it is {{days_late}} days overdue and statutory interest to date is INR {{interest_to_date}}.\n\n{{supplier_name}} offers to settle for INR {{offer}} (principal plus statutory interest, less a discount of {{discount_percent}}% on the interest).\n\nThis letter is a draft for {{supplier_name}} to approve before it is sent.\n"
+}
