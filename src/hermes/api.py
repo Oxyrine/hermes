@@ -11,7 +11,7 @@ import psycopg
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from psycopg.rows import dict_row
 
-from hermes.ledger import db, service, states
+from hermes.ledger import bank_rates, db, service, states
 
 TOKEN_TTL_SECONDS = 8 * 3600
 
@@ -192,6 +192,32 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
             return service.invoice_view(c, who["tenant"], invoice_id, as_of or service.today(c))
         except service.NotFound:
             raise HTTPException(404, "invoice not found") from None
+
+    @app.get("/v1/admin/bank-rates")
+    def rates(who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "hermes_ops")
+        return bank_rates.list_rates(c)
+
+    @app.post("/v1/admin/bank-rates")
+    def enter_rate(body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "hermes_ops")
+        try:
+            return bank_rates.enter(c, who["sub"], date.fromisoformat(body["effective_from"]),
+                                    str(body["rate"]), body["source_url"])
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
+        except (ValueError, KeyError, TypeError, ArithmeticError) as e:
+            raise HTTPException(422, f"bad rate: {e}") from None
+
+    @app.post("/v1/admin/bank-rates/{effective_from}/approve")
+    def approve_rate(effective_from: date, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "hermes_ops")
+        try:
+            return bank_rates.approve(c, who["sub"], effective_from)
+        except service.NotFound:
+            raise HTTPException(404, "rate not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
 
     @app.post("/v1/engines/{engine}/run")
     def run_engine(engine: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
