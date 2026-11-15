@@ -290,13 +290,14 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
     def propose(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
         require(who, "agent", "hermes_ops")
         try:
-            if body.get("kind") not in ("settlement_offer", "odr_pack"):
+            if body.get("kind") not in ("settlement_offer", "odr_pack", "gstr1a_draft"):
                 dl = body.get("deadline")
                 return service.propose_action(c, who["tenant"], invoice_id, body.get("kind"),
                                               body.get("draft"), f"{who['role']}:{who['sub']}",
                                               dl and date.fromisoformat(dl))
             proposers = {"settlement_offer": service.propose_settlement_offer,
-                         "odr_pack": service.propose_dispute_pack}
+                         "odr_pack": service.propose_dispute_pack,
+                         "gstr1a_draft": service.propose_gstr1a_draft}
             as_of = date.fromisoformat(body["as_of"]) if body.get("as_of") else service.today(c)
             return proposers[body["kind"]](c, who["tenant"], invoice_id, as_of,
                                            f"{who['role']}:{who['sub']}")

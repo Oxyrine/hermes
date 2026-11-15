@@ -20,8 +20,8 @@ class ScriptedAgent:
          "payment.received": self.payment_received,
          "offer.expired": self.offer_expired,
          "bank_rate.changed": self.bank_rate_changed,
-         "ims.action_changed": self.bank_rate_changed,  # the read re-runs evidence score and collateral
-         "source.record.ingested": lambda e: None,
+         "ims.action_changed": self.ims_action_changed,
+         "source.record.ingested": self.record_ingested,
          "action.approved": lambda e: None,
          "document.ingested": lambda e: None}[event["kind"]](event)  # published for later tickets (extraction) to act on
 
@@ -62,3 +62,28 @@ class ScriptedAgent:
     def bank_rate_changed(self, event: dict) -> None:
         """Re-run interest and collateral as of the event date (the read does both); no state moves."""
         self.call("GET", f"/v1/invoices/{event['invoice_id']}", params={"as_of": event["payload"]["as_of"]})
+
+    def record_ingested(self, event: dict) -> None:
+        if event["payload"]["source"] == "gstr1":
+            self.gst_check(event)
+
+    def ims_action_changed(self, event: dict) -> None:
+        self.bank_rate_changed(event)  # the read re-runs evidence score and collateral
+        self.gst_check(event)
+
+    def gst_check(self, event: dict) -> None:
+        """Block a verified invoice the buyer cannot see (or whose IMS rejection the supplier can
+        fix) and draft the correction for the supplier; return a blocked one to verified once IMS
+        accepts it, then try financeable (the server's guard decides). Guards refuse with 409."""
+        as_of, inv = event["payload"]["as_of"], event["invoice_id"]
+        state = self.call("GET", f"/v1/invoices/{inv}", params={"as_of": as_of})["state"]
+        steps = {"verified": ("gst_blocked",), "gst_blocked": ("verified", "financeable")}.get(state, ())
+        for to in steps:
+            try:
+                self.call("POST", f"/v1/invoices/{inv}/state", json={"to": to, "as_of": as_of})
+            except RuntimeError as e:
+                if " 409 " not in str(e):
+                    raise
+                return
+        if steps[:1] == ("gst_blocked",):
+            self.call("POST", f"/v1/invoices/{inv}/actions", json={"kind": "gstr1a_draft", "as_of": as_of})

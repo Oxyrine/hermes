@@ -205,6 +205,7 @@ def set_clock(conn, d: date) -> None:
 def guard_facts(conn, tenant_id, invoice_id, as_of: date) -> dict:
     """Facts the state machine's guards read, computed here so callers cannot supply them."""
     view = invoice_view(conn, tenant_id, invoice_id, as_of)
+    gst = gst_facts(conn, tenant_id, view["id"])
     row = conn.execute(
         "SELECT i.total - COALESCE((SELECT sum(amount) FROM payment WHERE invoice_id=i.id "
         "AND paid_on<=%s),0), i.due_date, EXISTS(SELECT 1 FROM advance WHERE invoice_id=i.id) "
@@ -218,7 +219,8 @@ def guard_facts(conn, tenant_id, invoice_id, as_of: date) -> dict:
     received = conn.execute("SELECT COALESCE(sum(amount),0) FROM payment WHERE invoice_id=%s "
                             "AND paid_on<=%s", (view["id"], as_of)).fetchone()[0]
     covered = received >= owed
-    return {"band": view["evidence"]["band"], "eligibility": view["eligibility"]["status"],
+    return {"ims_blocked": gst["blocked"], "ims_accepted": gst["accepted"],
+            "band": view["evidence"]["band"], "eligibility": view["eligibility"]["status"],
             "matched": bool(conn.execute(
                 "SELECT 1 FROM evidence_item WHERE invoice_id=%s AND signal='irn_valid_matching'",
                 (view["id"],)).fetchone()),
@@ -706,3 +708,77 @@ def record_award(conn, tenant_id, invoice_id, filename: str, content_b64: str, a
         conn.execute("INSERT INTO document (tenant_id, invoice_id, doc_type, gcs_uri, sha256) "
                      "VALUES (%s,%s,'award',%s,%s)", (tenant_id, inv, f"upload://{filename}", sha))
         move_state(conn, tenant_id, inv, "awarded", as_of, actor, {"award_document": True})
+
+
+# IMS rejection reason codes the supplier can fix by amending their own filing (the buyer's
+# disputes carry none). ponytail: a fixed list; the live IMS feed's real codes replace it.
+FIXABLE = ("invoice_details_mismatch", "wrong_pos", "wrong_value", "wrong_table")
+RULE = ("CGST Act 2017 s.37 and CGST Rules 2017 Rule 59: a supply to a registered buyer is reported "
+        "in the B2B table with the buyer's GSTIN; a wrong entry is amended through GSTR-1A or a "
+        "GSTR-1 amendment.")
+NOTE = ("Prepared for the supplier and their accountant. Hermes files nothing; the supplier or their "
+        "accountant files on the GST portal. This is not legal advice or tax advice: please check "
+        "the steps with a chartered accountant.")
+
+
+def gst_facts(conn, tenant_id, invoice_id) -> dict:
+    """What the supplier's GSTR-1 and the buyer's IMS view say about an invoice: `blocked` when
+    it was filed under B2C large (so the buyer never sees it) or the buyer's IMS rejected it for
+    a reason the supplier can fix, `accepted` when the latest IMS action is accepted."""
+    inv = conn.execute("SELECT invoice_no, supplier_id FROM invoice WHERE id=%s AND tenant_id=%s",
+                       (invoice_id, tenant_id)).fetchone()
+    last = conn.execute(
+        "SELECT e.action, r.payload FROM ims_event e LEFT JOIN raw_record r ON r.id::text=e.raw_ref "
+        "WHERE e.invoice_id=%s ORDER BY e.id DESC LIMIT 1", (invoice_id,)).fetchone()
+    filed = conn.execute(
+        "SELECT payload FROM raw_record WHERE tenant_id=%s AND supplier_id=%s AND source='gstr1' "
+        "AND payload->>'inum'=%s ORDER BY fetched_at DESC LIMIT 1",
+        (tenant_id, inv[1], inv[0])).fetchone()
+    wrong_table = filed is not None and filed[0]["table"] == "b2cl" and last is None
+    code = (last[1] or {}).get("reason_code") if last and last[0] == "rejected" else None
+    return {"blocked": wrong_table or code in FIXABLE,
+            "accepted": last is not None and last[0] == "accepted",
+            "wrong_table": wrong_table, "reason_code": code}
+
+
+def propose_gstr1a_draft(conn, tenant_id, invoice_id, as_of: date, actor: str) -> dict:
+    """The agent's code-generated correction draft for a GST-blocked invoice: what was filed, what
+    should have been, the steps to amend. For the supplier and their accountant to approve or
+    dismiss; Hermes files nothing. One live draft per invoice."""
+    inv_id = _owned(conn, tenant_id, invoice_id)
+    cur = conn.cursor(row_factory=dict_row)
+    live = cur.execute("SELECT * FROM action_request WHERE invoice_id=%s AND kind='gstr1a_draft' AND "
+                       "status IN ('proposed','approved')", (inv_id,)).fetchone()
+    if live:
+        return _action(live)
+    g = gst_facts(conn, tenant_id, inv_id)
+    if not g["blocked"]:
+        raise states.Refused("nothing to correct: the buyer's IMS view has this invoice")
+    i = cur.execute("SELECT i.invoice_no, i.invoice_date::text AS d, i.total::text AS total, "
+                    "b.gstin FROM invoice i JOIN buyer b ON b.id=i.buyer_id WHERE i.id=%s",
+                    (inv_id,)).fetchone()
+    should = {"table": "B2B", "buyer_gstin": i["gstin"]}
+    if g["wrong_table"]:
+        filed = {"table": "B2CL", "buyer_gstin": None, "source": "gstr1",
+                 "what": "filed as a B2C large invoice with no buyer GSTIN, so it never reached "
+                         "the buyer's IMS"}
+        steps = [f"Find invoice {i['invoice_no']} ({i['d']}, Rs {i['total']}) in the GSTR-1 B2CL table.",
+                 ("Amend it into the B2B table with the buyer's GSTIN above, through GSTR-1A or the "
+                  "GSTR-1 amendment tables for the period."),
+                 "File the amendment on the GST portal (the supplier or their accountant does this).",
+                 "Once the buyer's IMS shows the invoice as accepted, Hermes moves it back to verified."]
+    else:
+        filed = {"table": "B2B", "buyer_gstin": i["gstin"], "source": "ims", "ims_action": "rejected",
+                 "what": f"rejected in the buyer's IMS (reason: {g['reason_code']})"}
+        steps = [f"Check invoice {i['invoice_no']} against the IMS rejection reason: {g['reason_code']}.",
+                 ("Amend the invoice details in GSTR-1A or the GSTR-1 amendment tables to match "
+                  "your invoice."),
+                 "File the amendment on the GST portal (the supplier or their accountant does this).",
+                 ("Ask the buyer to accept the corrected record in IMS; Hermes then moves the "
+                  "invoice back to verified.")]
+    draft = {"as_of": as_of.isoformat(), "audience": "supplier_and_accountant", "filed": filed,
+             "should_have_been": should, "steps": steps, "rule": RULE, "note": NOTE}
+    return _action(cur.execute(
+        "INSERT INTO action_request (tenant_id, invoice_id, kind, draft, status, proposed_by) "
+        "VALUES (%s,%s,'gstr1a_draft',%s::jsonb,'proposed',%s) RETURNING *",
+        (tenant_id, inv_id, json.dumps(draft), actor)).fetchone())
