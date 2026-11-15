@@ -188,7 +188,7 @@ def test_ims_reversal_after_funding_raises_flag_alert_review_and_event(client, c
     assert drain(conn.info.dsn, SECRET, client) > 0
     v = client.get(f"/v1/invoices/{inv}", headers=h).json()
     pts = {c["signal"]: c["points"] for c in v["evidence"]["contributions"]}
-    assert pts["ims_rejected"] == -30 and "ims_accepted" not in pts  # +25 replaced by -30
+    assert pts["ims_rejected"] == -30 and "ims_accepted" not in pts  # +30 replaced by -30
     assert v["evidence"]["hard_flags"] == ["ims_rejected"] and v["needs_review"]
     assert "hard_flag_after_funding" in v["collateral"]["alerts"]
     assert [f["kind"] for f in v["hard_flags"]] == ["ims_rejection"]

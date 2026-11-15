@@ -65,14 +65,16 @@ class ScriptedAgent:
                 "mismatches": [m | {"note": n} for m, n in zip(out["mismatches"], notes, strict=True)]}})
         if self.state(inv) != "ingested":
             return
-        try:
-            self.call("POST", f"/v1/invoices/{inv}/state", json={
-                "to": "needs_review" if out["mismatches"] or out["review"] else "verified"})
-        except RuntimeError as e:
-            # 409: guard refused. 422: the contract or delivery date has not arrived yet. Either way
-            # not enough evidence yet; it stays ingested and the next document tries again.
-            if " 409 " not in str(e) and " 422 " not in str(e):
-                raise
+        to = "needs_review" if out["mismatches"] or out["review"] else "verified"
+        for step in (to, "financeable") if to == "verified" else (to,):
+            try:
+                self.call("POST", f"/v1/invoices/{inv}/state", json={"to": step})
+            except RuntimeError as e:
+                # 409: guard refused. 422: the contract or delivery date has not arrived yet. Either
+                # way not enough evidence yet; it stays where it is and the next event tries again.
+                if " 409 " not in str(e) and " 422 " not in str(e):
+                    raise
+                return
 
     def deadline_passed(self, event: dict) -> None:
         """Re-run interest and collateral (the invoice read runs and stores both engines as of

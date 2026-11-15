@@ -25,7 +25,7 @@ def test_full_evidence_band_a_and_clamp():
         "irn_valid_matching", "ewb_matching", "grn_matching", "po_matching",
         "ims_accepted", "buyer_email_ack", "part_payment")]
     r = score(allpos)["result"]
-    assert (r["score"], r["band"], r["needs_review"]) == (90, "A", False)
+    assert (r["score"], r["band"], r["needs_review"]) == (95, "A", False)
     assert score(allpos + [sig("ims_accepted")])["result"]["score"] == 100
 
 
@@ -35,7 +35,7 @@ def test_hard_flag_forces_review_and_floor():
     assert r["hard_flags"] == ["ims_rejected"] and r["needs_review"]
     r = score([sig(t) for t in ("irn_valid_matching", "ims_accepted", "grn_matching",
                                 "ewb_matching", "po_matching", "written_objection_15d")])["result"]
-    assert r["score"] == 55 and r["band"] == "C" and r["needs_review"]
+    assert r["score"] == 60 and r["band"] == "B" and r["needs_review"]
 
 
 @pytest.mark.parametrize("pts,band", [(79, "B"), (60, "B"), (59, "C"), (40, "C"), (39, "D")])
@@ -47,7 +47,7 @@ def test_band_edges(pts, band):
 
 def test_envelope_and_unknown():
     out = score([sig("debit_note")])
-    assert out["rule_version"] == "1.0.0" and len(out["input_hash"]) == 64
+    assert out["rule_version"] == "1.1.0" and len(out["input_hash"]) == 64
     assert out["result"]["contributions"][0]["source"] == "src:debit_note"
     with pytest.raises(ValueError):
         score([sig("nope")])

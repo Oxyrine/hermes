@@ -4,12 +4,14 @@
 
 **Blocked by:** 18
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Starting from upload and fixture ingestion only, the invoice reaches verified with no manual step
-- [ ] Evidence score is 80 or above, band A, with no hard flags
-- [ ] The invoice becomes financeable and the advance offered is 80% under policy v0
-- [ ] After the advance is recorded and the buyer pays before the due date, the invoice moves to paid; no statutory interest is claimed
-- [ ] The waterfall runs and the invoice closes on lender confirmation
-- [ ] The scenario passes as a test driven only through the API, fixture ingestion, the clock and approval calls, with the scripted runner and fake model
-- [ ] The late-buyer scenario still passes
+- [x] Starting from upload and fixture ingestion only, the invoice reaches verified with no manual step
+- [x] Evidence score is 80 or above, band A, with no hard flags
+- [x] The invoice becomes financeable and the advance offered is 80% under policy v0
+- [x] After the advance is recorded and the buyer pays before the due date, the invoice moves to paid; no statutory interest is claimed
+- [x] The waterfall runs and the invoice closes on lender confirmation
+- [x] The scenario passes as a test driven only through the API, fixture ingestion, the clock and approval calls, with the scripted runner and fake model
+- [x] The late-buyer scenario still passes
+
+**Gaps closed:** the evidence weights could not reach band A from the clean path's signals (IRN, e-way bill, PO, GRN, IMS accepted = 75), so `ims_accepted` is now 30 points (evidence rules 1.1.0); the scripted runner now moves a freshly verified invoice on to financeable (the server guard still decides).

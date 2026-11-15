@@ -99,7 +99,7 @@ def test_clean_documents_verify_the_invoice_and_store_fields_model_and_confidenc
     iid = upload(client, root, INV)
     model = fake_for(root, INV)
     run(client, conn, reader_for(root, model))
-    assert state(client, iid) == "verified"
+    assert state(client, iid) == "financeable"  # the scripted runner moves a verified invoice on; the server guard decides
     d = docs(conn, iid)
     ex, mdl, conf = d["invoice"]
     assert ex["invoice_no"] and ex["sources"]["total"]["quote"] and ex["review"] == []
