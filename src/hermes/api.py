@@ -15,6 +15,7 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from psycopg.rows import dict_row
 
+from hermes import portfolio as pf
 from hermes import statement, supplier
 from hermes.ledger import bank_rates, db, ingest, onboarding, service, states
 from hermes.ledger.service import NotFound
@@ -414,6 +415,53 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
     @app.get("/v1/invoices")
     def invoices(who=Depends(caller), c=Depends(conn)):
         return service.list_invoices(c, who["tenant"], who.get("supplier") if who["role"] == "supplier" else None)
+
+    LENDER = ("lender_ops", "lender_approver", "hermes_ops")
+
+    @app.get("/v1/portfolio")
+    def portfolio(as_of: date | None = None, state: str | None = None, band: str | None = None,
+                  buyer: str | None = None, who=Depends(caller), c=Depends(conn)):
+        require(who, *LENDER)
+        return pf.portfolio(c, who["tenant"], as_of or service.today(c), state, band, buyer)
+
+    @app.get("/v1/portfolio.csv")
+    def portfolio_csv(as_of: date | None = None, state: str | None = None, band: str | None = None,
+                      buyer: str | None = None, who=Depends(caller), c=Depends(conn)):
+        require(who, *LENDER)
+        rows = pf.portfolio(c, who["tenant"], as_of or service.today(c), state, band, buyer)
+        return Response(pf.portfolio_csv(rows), media_type="text/csv", headers={
+            "content-disposition": 'attachment; filename="portfolio.csv"'})
+
+    @app.get("/v1/buyers/{buyer_id}")
+    def buyer_view(buyer_id: str, as_of: date | None = None, who=Depends(caller), c=Depends(conn)):
+        require(who, *LENDER)
+        return refuse(pf.buyer_view, c, who["tenant"], buyer_id, as_of or service.today(c))
+
+    @app.put("/v1/buyers/{buyer_id}/watchlist")
+    def watch(buyer_id: str, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "lender_approver")
+        return refuse(pf.set_watch, c, who["tenant"], buyer_id, who["sub"], True)
+
+    @app.delete("/v1/buyers/{buyer_id}/watchlist")
+    def unwatch(buyer_id: str, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "lender_approver")
+        return refuse(pf.set_watch, c, who["tenant"], buyer_id, who["sub"], False)
+
+    @app.get("/v1/alerts")
+    def alert_list(as_of: date | None = None, who=Depends(caller), c=Depends(conn)):
+        require(who, *LENDER)
+        return pf.alert_list(c, who["tenant"], as_of or service.today(c))
+
+    @app.post("/v1/alerts/acknowledge")
+    def acknowledge(body: dict = Body(...), as_of: date | None = None, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "lender_approver")
+        return refuse(pf.work_alert, c, who["tenant"], as_of or service.today(c), body.get("key"), who["sub"])
+
+    @app.post("/v1/alerts/assign")
+    def assign(body: dict = Body(...), as_of: date | None = None, who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "lender_approver")
+        return refuse(pf.work_alert, c, who["tenant"], as_of or service.today(c), body.get("key"),
+                      who["sub"], body.get("assignee") or "")
 
     @app.get("/v1/me/invoices")
     def my_invoices(as_of: date | None = None, who=Depends(caller), c=Depends(conn)):

@@ -39,6 +39,14 @@ CREATE TABLE buyer (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), gstin CHAR(15
   legal_name TEXT NOT NULL, is_cpse BOOLEAN NOT NULL DEFAULT false,
   on_treds BOOLEAN NOT NULL DEFAULT false, watchlist BOOLEAN NOT NULL DEFAULT false);
 
+CREATE TABLE buyer_watch (tenant_id UUID NOT NULL REFERENCES tenant, buyer_id UUID NOT NULL REFERENCES buyer,
+  added_by UUID REFERENCES app_user, added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, buyer_id));   -- per lender; buyer.watchlist is global so is not used
+
+CREATE TABLE alert_state (tenant_id UUID NOT NULL REFERENCES tenant, key TEXT NOT NULL,
+  acknowledged_by UUID REFERENCES app_user, acknowledged_at TIMESTAMPTZ,
+  assigned_to UUID REFERENCES app_user, PRIMARY KEY (tenant_id, key));   -- alerts are derived; only this is stored
+
 CREATE TABLE contract (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, supplier_id UUID NOT NULL REFERENCES supplier,
   buyer_id UUID NOT NULL REFERENCES buyer, signed_date DATE,
