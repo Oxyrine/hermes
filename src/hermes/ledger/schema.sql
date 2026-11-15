@@ -80,6 +80,11 @@ CREATE TABLE evidence_item (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, invoice_id UUID NOT NULL REFERENCES invoice,
   signal TEXT NOT NULL, value JSONB, source_ref JSONB, detected_at TIMESTAMPTZ);
 
+CREATE TABLE hard_flag_event (id BIGSERIAL PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES tenant,
+  invoice_id UUID NOT NULL REFERENCES invoice, kind TEXT NOT NULL, flagged_on DATE NOT NULL,
+  detail JSONB, raised_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  delivered_at TIMESTAMPTZ);   -- a hard flag on a funded invoice, waiting for delivery to the lender (ticket 33)
+
 CREATE TABLE payment (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, invoice_id UUID NOT NULL REFERENCES invoice,
   amount NUMERIC(18,2) NOT NULL, paid_on DATE NOT NULL, utr TEXT, source TEXT,
@@ -108,7 +113,7 @@ CREATE TABLE collateral_snapshot (invoice_id UUID NOT NULL REFERENCES invoice,
 CREATE TABLE action_request (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, invoice_id UUID NOT NULL REFERENCES invoice,
   kind TEXT NOT NULL CHECK (kind IN ('settlement_offer','odr_pack','buyer_note','gstr1a_draft',
-    'doc_link','objection','contract_terms')),
+    'doc_link','objection','contract_terms','review')),
   draft JSONB, status TEXT NOT NULL CHECK (status IN ('proposed','approved','rejected','sent','expired')),
   proposed_by TEXT, approved_by UUID REFERENCES app_user, approved_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ, reject_reason TEXT, edit_difference JSONB,

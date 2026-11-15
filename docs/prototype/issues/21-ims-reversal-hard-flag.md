@@ -4,13 +4,13 @@
 
 **Blocked by:** 16
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The reversal arrives as a new IMS event; the earlier acceptance remains in the history
-- [ ] The evidence score re-runs: the +25 is replaced by −30 and a hard flag
-- [ ] The collateral engine raises its "hard flag after funding" alert
-- [ ] The invoice is marked for review whatever its score; a review action is proposed
-- [ ] The flag and alert appear on the invoice page and in the timeline
-- [ ] A hard-flag event is recorded for later delivery to the lender
-- [ ] A debit note against a funded invoice and a confirmed objection on a funded invoice raise the same flag path
-- [ ] Scenario 6 passes up to, but not including, the webhook assertion
+- [x] The reversal arrives as a new IMS event; the earlier acceptance remains in the history
+- [x] The evidence score re-runs: the +25 is replaced by −30 and a hard flag
+- [x] The collateral engine raises its "hard flag after funding" alert
+- [x] The invoice is marked for review whatever its score; a review action is proposed
+- [x] The flag and alert appear on the invoice page and in the timeline
+- [x] A hard-flag event is recorded for later delivery to the lender
+- [x] A debit note against a funded invoice and a confirmed objection on a funded invoice raise the same flag path
+- [x] Scenario 6 passes up to, but not including, the webhook assertion

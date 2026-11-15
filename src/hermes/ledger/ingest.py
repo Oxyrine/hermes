@@ -117,6 +117,8 @@ def _ims(conn, t, inv, rec, raw, f):
         (t, inv, action, _d(p["actndt"]) if p.get("actndt") else None, raw, rec.fetched_at)).fetchone()[0]
     _evidence(conn, t, inv, f"ims_{action}", {"raw_id": raw, "ims_event_id": eid},
               {"gstr2b_generated": _d(p["gstr2b_gendt"])} if action == "no_action" else None)
+    if action == "rejected":
+        service.raise_hard_flag(conn, t, inv, "ims_rejection", {"ims_event_id": eid, "raw_id": raw})
 
 
 def _ewb(conn, t, inv, rec, raw, f):

@@ -21,6 +21,7 @@ class ScriptedAgent:
          "offer.expired": self.offer_expired,
          "bank_rate.changed": self.bank_rate_changed,
          "ims.action_changed": self.bank_rate_changed,  # the read re-runs evidence score and collateral
+         "invoice.hard_flag": self.hard_flag,
          "source.record.ingested": lambda e: None,
          "action.approved": lambda e: None,
          "document.ingested": lambda e: None}[event["kind"]](event)  # published for later tickets (extraction) to act on
@@ -62,3 +63,13 @@ class ScriptedAgent:
     def bank_rate_changed(self, event: dict) -> None:
         """Re-run interest and collateral as of the event date (the read does both); no state moves."""
         self.call("GET", f"/v1/invoices/{event['invoice_id']}", params={"as_of": event["payload"]["as_of"]})
+
+    def hard_flag(self, event: dict) -> None:
+        """A hard flag on a funded invoice: re-read it (re-runs evidence and the collateral alert)
+        and stop for a person by proposing a review, whatever the score."""
+        inv, as_of = event["invoice_id"], event["payload"]["as_of"]
+        view = self.call("GET", f"/v1/invoices/{inv}", params={"as_of": as_of})
+        self.call("POST", f"/v1/invoices/{inv}/actions", json={"kind": "review", "draft": {
+            "flags": [f["kind"] for f in view["hard_flags"]],
+            "alerts": (view["collateral"] or {}).get("alerts", []),
+            "score": view["evidence"]["score"], "band": view["evidence"]["band"], "as_of": as_of}})

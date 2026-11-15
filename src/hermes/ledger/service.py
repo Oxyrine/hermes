@@ -132,6 +132,9 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
     adv = cur.execute("SELECT principal, disbursed_on FROM advance WHERE invoice_id=%s AND "
                       "tenant_id=%s ORDER BY disbursed_on LIMIT 1", (invoice_id, tenant_id)).fetchone()
 
+    flags = cur.execute("SELECT kind, flagged_on FROM hard_flag_event WHERE invoice_id=%s AND "
+                        "tenant_id=%s ORDER BY id", (invoice_id, tenant_id)).fetchall()
+
     env = {} if env is None else env
 
     def run(engine, inputs):
@@ -155,6 +158,8 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
                                 detail=elig["result"]["reasons"]),
         "deadline": _section(dl, **dl["result"]),
         "evidence": _section(ev, **ev["result"]),
+        "hard_flags": [{"kind": f["kind"], "flagged_on": f["flagged_on"].isoformat()} for f in flags],
+        "needs_review": ev["result"]["needs_review"] or bool(flags),
         "claim": None, "collateral": None,
     }
     if dl["result"]["status"] != "ok":
@@ -177,6 +182,7 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
         "as_of": as_of.isoformat(), "statutory_claim": stat["result"]["claim"] if stat else "0",
         "lender_rate_percent": str(inv["lender_rate_nominal"]), "bank_rate_percent": bank_rate,
     }
+    col_in["hard_flags"] = [{"date": f["flagged_on"].isoformat(), "kind": f["kind"]} for f in flags]
     if adv:
         col_in |= {"advance": str(adv["principal"]), "funded_on": adv["disbursed_on"].isoformat()}
     env["collateral_inputs"] = col_in
@@ -189,6 +195,22 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
     out["collateral"] = _section(col, exposure=cr["exposure_display"], ltv=cr["ltv"],
                                  advance_rate=cr["advance_rate"], alerts=cr["alerts"])
     return out
+
+
+def raise_hard_flag(conn, tenant_id, invoice_id, kind: str, detail: dict | None = None) -> bool:
+    """A hard flag on a funded invoice (IMS rejection, debit note, confirmed objection): record it
+    for the lender and wake the agent, which re-reads the invoice and proposes a review. An
+    unfunded invoice has no lender to tell, so nothing is recorded. Returns whether it was."""
+    if not conn.execute("SELECT 1 FROM advance WHERE invoice_id=%s AND tenant_id=%s",
+                        (invoice_id, tenant_id)).fetchone():
+        return False
+    d = today(conn)
+    conn.execute("INSERT INTO hard_flag_event (tenant_id, invoice_id, kind, flagged_on, detail) "
+                 "VALUES (%s,%s,%s,%s,%s::jsonb)", (tenant_id, invoice_id, kind, d, json.dumps(detail or {})))
+    conn.execute("INSERT INTO event_queue (tenant_id, invoice_id, kind, payload) "
+                 "VALUES (%s,%s,'invoice.hard_flag',%s::jsonb)",
+                 (tenant_id, invoice_id, json.dumps({"flag": kind, "as_of": d.isoformat()})))
+    return True
 
 
 def today(conn) -> date:
@@ -350,6 +372,8 @@ def slots(kind: str, lender_consent: bool = False) -> list[tuple]:
         return [("hermes_ops",), ("supplier",)]
     if kind == "contract_terms":
         return [("hermes_ops",)]
+    if kind == "review":
+        return [("lender_approver",)]
     if kind == "doc_link":
         return [("supplier", "hermes_ops")]
     return [("supplier",)] + ([("lender_approver",)] if kind == "settlement_offer" and lender_consent else [])
@@ -381,7 +405,7 @@ def propose_action(conn, tenant_id, invoice_id, kind: str, draft: dict, actor: s
                    deadline: date | None = None) -> dict:
     """The agent's draft of any other gated action; nothing happens until people approve."""
     if kind == "settlement_offer" or kind not in ("buyer_note", "gstr1a_draft",
-                                                  "doc_link", "objection", "contract_terms"):
+                                                  "doc_link", "objection", "contract_terms", "review"):
         raise ValueError(f"unsupported action kind {kind}")
     if not isinstance(draft, dict):
         raise TypeError("draft must be an object")
@@ -577,6 +601,9 @@ def decide_action(conn, tenant_id, action_id, user_id: str, role: str, approve: 
         if done:
             as_of = (row["draft"] or {}).get("as_of")
             target = {"settlement_offer": "settlement_offered", "odr_pack": "odr_ready"}.get(row["kind"])
+            if row["kind"] == "objection":  # a confirmed objection on a funded invoice
+                raise_hard_flag(conn, tenant_id, row["invoice_id"], "written_objection",
+                                {"action_id": str(row["id"])})
             if target:
                 move_state(conn, tenant_id, row["invoice_id"], target, date.fromisoformat(as_of),
                            f"user:{user_id}")

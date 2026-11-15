@@ -160,3 +160,71 @@ def test_bank_credit_becomes_a_payment_and_the_invoice_moves_to_paid(client, con
     assert conn.execute("SELECT raw_id IS NOT NULL FROM payment").fetchone()[0]
     assert drain(conn.info.dsn, SECRET, client) > 0
     assert client.get(f"/v1/invoices/{inv}", headers=h).json()["state"] == "paid"
+
+
+# ---- ticket 21: reversal and other hard flags on a funded invoice ----
+
+def funded_reversal(client, conn, root):
+    """INV-019 accepted and funded, then the buyer rejects it in IMS."""
+    for src in ("documents", "einvoice", "ims_supplier_view"):
+        pull(client, conn, root, "S1", src)
+    inv, h = invoice_id(client, root, "INV-019"), login(client)
+    conn.execute("UPDATE invoice SET state='verified' WHERE id=%s", (inv,))  # as the full load leaves it
+    client.put("/dev/clock", json={"date": "2026-09-10"})
+    r = client.post(f"/v1/invoices/{inv}/advances", headers=h,
+                    json={"principal": "100000.00", "disbursed_on": "2026-09-01"})
+    assert r.status_code == 200, r.text
+    drain(conn.info.dsn, SECRET, client)
+    return inv, h
+
+
+def test_ims_reversal_after_funding_raises_flag_alert_review_and_event(client, conn, root):
+    inv, h = funded_reversal(client, conn, root)
+    before = client.get(f"/v1/invoices/{inv}", headers=h).json()
+    assert before["hard_flags"] == [] and "hard_flag_after_funding" not in before["collateral"]["alerts"]
+    pull(client, conn, root, "S1", "ims_supplier_view", fixture="ims_supplier_view_reversal")
+    assert conn.execute("SELECT action FROM ims_event WHERE invoice_id=%s ORDER BY id",
+                        (inv,)).fetchall() == [("accepted",), ("rejected",)]  # history kept
+    assert drain(conn.info.dsn, SECRET, client) > 0
+    v = client.get(f"/v1/invoices/{inv}", headers=h).json()
+    pts = {c["signal"]: c["points"] for c in v["evidence"]["contributions"]}
+    assert pts["ims_rejected"] == -30 and "ims_accepted" not in pts  # +25 replaced by -30
+    assert v["evidence"]["hard_flags"] == ["ims_rejected"] and v["needs_review"]
+    assert "hard_flag_after_funding" in v["collateral"]["alerts"]
+    assert [f["kind"] for f in v["hard_flags"]] == ["ims_rejection"]
+    (review,) = [a for a in client.get("/v1/actions", headers=login(client, "approver@lender-a.example"),
+                                       params={"status": "proposed"}).json()
+                 if a["kind"] == "review" and a["invoice_id"] == inv]
+    assert review["draft"]["flags"] == ["ims_rejection"]
+    assert conn.execute("SELECT kind, delivered_at FROM hard_flag_event WHERE invoice_id=%s",
+                        (inv,)).fetchall() == [("ims_rejection", None)]
+    kinds = [e["event"] for e in client.get(f"/v1/invoices/{inv}/timeline", headers=h).json()
+             if e["kind"] == "event"]
+    assert "invoice.hard_flag" in kinds
+
+
+def test_reversal_on_an_unfunded_invoice_records_no_lender_event(client, conn, root):
+    for src in ("documents", "einvoice", "ims_supplier_view"):
+        pull(client, conn, root, "S1", src)
+    pull(client, conn, root, "S1", "ims_supplier_view", fixture="ims_supplier_view_reversal")
+    assert conn.execute("SELECT count(*) FROM hard_flag_event").fetchone()[0] == 0
+
+
+def test_debit_note_and_confirmed_objection_on_a_funded_invoice_raise_the_same_flag(client, conn, root):
+    inv, h = funded_reversal(client, conn, root)
+    pdf = b"%PDF-1.4 debit note"
+    r = client.post("/v1/documents", params={"filename": "dn.pdf", "doc_type": "debit_note",
+                                             "invoice_id": inv},
+                    content=pdf, headers=h | {"Content-Type": "application/pdf"})
+    assert r.status_code == 200, r.text
+    conn.execute("INSERT INTO app_user (tenant_id, email, role) SELECT tenant_id, "
+                 "'hermesops@hermes.example', 'hermes_ops' FROM app_user LIMIT 1")
+    a = client.post(f"/v1/invoices/{inv}/actions", headers=login(client, "agent@lender-a.example"),
+                    json={"kind": "objection", "draft": {"text": "goods not received"}}).json()
+    for who in ("hermesops@hermes.example", "supplier@kaveri.example"):
+        assert client.post(f"/v1/actions/{a['id']}/approve", headers=login(client, who)).status_code == 200
+    assert conn.execute("SELECT kind FROM hard_flag_event WHERE invoice_id=%s ORDER BY id",
+                        (inv,)).fetchall() == [("debit_note",), ("written_objection",)]
+    drain(conn.info.dsn, SECRET, client)
+    v = client.get(f"/v1/invoices/{inv}", headers=h).json()
+    assert "hard_flag_after_funding" in v["collateral"]["alerts"] and v["needs_review"]
