@@ -91,7 +91,8 @@ def _set_due(conn, inv):
         "(SELECT written_payment_days FROM contract WHERE id=i.contract_id) FROM invoice i "
         "WHERE i.id=%s", (inv,)).fetchone()
     if row[0]:
-        due = deadline.run({"delivery": row[0], "written_days": row[1]})["result"]["due"]
+        due = deadline.run({"delivery": row[0], "written_days": row[1],
+                            "objection": service.confirmed_objection(conn, inv)})["result"]["due"]
         conn.execute("UPDATE invoice SET due_date=%s WHERE id=%s", (due, inv))
 
 
@@ -164,17 +165,17 @@ def _documents(conn, t, inv, rec, raw, f):
         _evidence(conn, t, inv, f"{kind}_matching", {"document_id": did, "doc_type": kind, "raw_id": raw})
     if kind == "po":
         _contract(conn, t, inv, fields["po_date"])
-    if kind == "contract":
-        days = fields.get("payment_days")
-        _contract(conn, t, inv, fields["signed_date"], days,
-                  days and {"doc_id": did, "page": fields["page"], "quote": fields["clause_quote"]})
+    if kind == "contract":  # the payment term is read by the model and confirmed by a person (ticket 20)
+        _contract(conn, t, inv, fields["signed_date"])
     if kind in ("grn", "challan", "contract"):
         _set_due(conn, inv)
+    return {"document_id": did, "doc_type": "contract"} if kind == "contract" else None
 
 
 def _email(conn, t, inv, rec, raw, f):
-    _store(conn, t, inv, "email", rec.external_id + ".json", "application/json",
-           json.dumps(rec.payload).encode(), None, raw)
+    did = _store(conn, t, inv, "email", rec.external_id + ".json", "application/json",
+                 json.dumps(rec.payload).encode(), None, raw)
+    return {"document_id": did, "doc_type": "email"}
 
 
 NORMALISE = {"ims_supplier_view": _ims, "ewb": _ewb, "einvoice": _einvoice, "bank_statement": _bank,
@@ -194,10 +195,10 @@ def _ingest(conn, tenant_id, supplier_id, rec: adapters.RawRecord) -> str:
             return "duplicate"
         raw, f = row[0], _fields(conn, rec.source, rec.payload)
         status, inv, score, names = match(conn, tenant_id, supplier_id, f)
-        reason = None
+        reason, more = None, None
         try:
             if status == "linked":
-                NORMALISE[rec.source](conn, tenant_id, inv, rec, raw, f)
+                more = NORMALISE[rec.source](conn, tenant_id, inv, rec, raw, f)
         except Mismatch as e:
             status, reason = "review", str(e)
         if status == "review":
@@ -210,7 +211,7 @@ def _ingest(conn, tenant_id, supplier_id, rec: adapters.RawRecord) -> str:
             conn.execute("INSERT INTO event_queue (tenant_id, invoice_id, kind, payload) "
                          "VALUES (%s,%s,%s,%s::jsonb)",
                          (tenant_id, inv, EVENTS.get(rec.source, "source.record.ingested"),
-                          json.dumps({"source": rec.source, "raw_id": raw, "as_of": as_of})))
+                          json.dumps({"source": rec.source, "raw_id": raw, "as_of": as_of, **(more or {})})))
     return status
 
 

@@ -17,7 +17,7 @@ from psycopg.rows import dict_row
 
 from hermes import letter, statement, supplier, webhooks
 from hermes import portfolio as pf
-from hermes.ledger import bank_rates, db, extract, ingest, onboarding, service, states
+from hermes.ledger import bank_rates, db, extract, facts, ingest, onboarding, service, states
 from hermes.ledger.service import NotFound
 
 TOKEN_TTL_SECONDS = 8 * 3600
@@ -246,6 +246,25 @@ def create_app(dsn: str, secret: str, env: str = "production", model=None) -> Fa
             raise HTTPException(404, "document not found") from None
         except (ValueError, KeyError, TypeError) as e:
             raise HTTPException(422, f"bad extraction: {e}") from None
+
+    @app.post("/v1/documents/{document_id}/objection")
+    def objection(document_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        """The agent's write path for a model-read objection: becomes a confirmation action."""
+        require(who, "agent", "hermes_ops")
+        return fact(facts.store_objection, document_id, body, who, c)
+
+    @app.post("/v1/documents/{document_id}/contract-terms")
+    def contract_terms(document_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        require(who, "agent", "hermes_ops")
+        return fact(facts.store_contract_terms, document_id, body, who, c)
+
+    def fact(store, document_id, body, who, c):
+        try:
+            return store(c, who["tenant"], document_id, body, f"{who['role']}:{who['sub']}")
+        except service.NotFound:
+            raise HTTPException(404, "document not found") from None
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(422, f"bad reading: {e}") from None
 
     @app.post("/v1/invoices/{invoice_id}/resolve-review")
     def resolve_review(invoice_id: str, who=Depends(caller), c=Depends(conn)):

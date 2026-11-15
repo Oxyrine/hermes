@@ -148,6 +148,8 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
         "enterprise_type": sup["enterprise_type"], "classification": cls["class"] if cls else None,
         "contract_date": con["signed_date"].isoformat(), "supply_date": delivery})
     dl_in = {"delivery": delivery, "written_days": con["written_payment_days"]}
+    if obj := confirmed_objection(conn, invoice_id):  # only a person-confirmed objection counts
+        dl_in["objection"] = obj
     dl = run("deadline", dl_in)
     ev = run("evidence", {"as_of": as_of.isoformat(), "signals": [
         {"type": i["signal"], "source": i["source_ref"], **(i["value"] or {})} for i in items]})
@@ -196,6 +198,18 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
     out["collateral"] = _section(col, exposure=cr["exposure_display"], ltv=cr["ltv"],
                                  advance_rate=cr["advance_rate"], alerts=cr["alerts"])
     return out
+
+
+def confirmed_objection(conn, invoice_id) -> dict | None:
+    """The latest approved objection on the invoice, as the deadline engine takes it, with the
+    approver's corrections applied. None when there is none."""
+    row = conn.execute("SELECT draft, edit_difference FROM action_request WHERE invoice_id=%s "
+                       "AND kind='objection' AND status='approved' ORDER BY approved_at DESC LIMIT 1",
+                       (invoice_id,)).fetchone()
+    if row is None:
+        return None
+    d = (row[0] or {}) | {k: v["to"] for k, v in (row[1] or {}).items()}
+    return {"raised_on": d["raised_on"], "removed_on": d.get("removed_on") or None} if d.get("raised_on") else None
 
 
 def raise_hard_flag(conn, tenant_id, invoice_id, kind: str, detail: dict | None = None) -> bool:
@@ -600,6 +614,18 @@ NOT_EDITABLE = {"offer", "floor", "as_of", "expires_on", "needs_lender_consent",
                 "letter_source", "discount_percent"}
 
 
+def _iso(v: str) -> bool:
+    try:
+        return bool(date.fromisoformat(v))
+    except ValueError:
+        return False
+
+
+# the approver may correct the date or the term, nothing else, and only to a well-formed value
+FACT_EDITS = {"objection": {"raised_on": _iso, "removed_on": _iso},
+              "contract_terms": {"payment_days": str.isdigit}}
+
+
 def _lock_action(conn, tenant_id, action_id, role: str, supplier_id: str | None) -> dict:
     """The proposed action, row-locked, for a person whose role holds one of its approver slots."""
     try:
@@ -666,6 +692,9 @@ def decide_action(conn, tenant_id, action_id, user_id: str, role: str, approve: 
         if done:
             as_of = (row["draft"] or {}).get("as_of")
             target = {"settlement_offer": "settlement_offered", "odr_pack": "odr_ready"}.get(row["kind"])
+            if row["kind"] in FACT_EDITS:  # a confirmed fact takes effect; deadline and evidence follow
+                from hermes.ledger import facts
+                facts.apply(conn, row, _fresh(conn, row["id"])["final_draft"], user_id)
             if row["kind"] == "objection":  # a confirmed objection on a funded invoice
                 raise_hard_flag(conn, tenant_id, row["invoice_id"], "written_objection",
                                 {"action_id": str(row["id"])})
@@ -690,8 +719,9 @@ def edit_action(conn, tenant_id, action_id, user_id: str, role: str, changes: di
         row = _lock_action(conn, tenant_id, action_id, role, supplier_id)
         draft, diff = row["draft"] or {}, dict(row["edit_difference"] or {})
         for k, v in changes.items():
-            if k not in draft or k in NOT_EDITABLE or not isinstance(v, str):
-                raise ValueError(f"{k} cannot be edited")
+            if k not in draft or k in NOT_EDITABLE or not isinstance(v, str) or (
+                    row["kind"] in FACT_EDITS and not FACT_EDITS[row["kind"]].get(k, lambda _: False)(v)):
+                raise ValueError(f"{k} cannot be edited to that")
             if v == draft[k]:
                 diff.pop(k, None)
             else:
