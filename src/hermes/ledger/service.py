@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from psycopg.rows import dict_row
 
-from hermes import webhooks
+from hermes import letter, webhooks
 from hermes.engines import collateral, deadline, eligibility, evidence, interest, settlement
 from hermes.engines.common import canonical_json
 from hermes.ledger import states
@@ -430,7 +430,7 @@ def propose_action(conn, tenant_id, invoice_id, kind: str, draft: dict, actor: s
     return _action(row)
 
 
-def _settlement_run(conn, tenant_id, inv_id, as_of: date):
+def _settlement_run(conn, tenant_id, inv_id, as_of: date, discount: str = "0"):
     """Run the engines for the invoice as of a date and the settlement engine over them (which
     also holds the dispute pack). Returns the settlement envelope and the other envelopes."""
     cur = conn.cursor(row_factory=dict_row)
@@ -449,16 +449,18 @@ def _settlement_run(conn, tenant_id, inv_id, as_of: date):
         "invoice": {"invoice_no": row["invoice_no"], "invoice_date": row["invoice_date"],
                     "principal": view["claim"]["principal"], "supplier_name": row["supplier"],
                     "buyer_name": row["buyer"]},
-        "as_of": as_of.isoformat(), "discount_percent": "0", "agreed_costs": "0",
+        "as_of": as_of.isoformat(), "discount_percent": discount, "agreed_costs": "0",
         "documents": docs,
         "eligibility": env["eligibility"], "deadline": env["deadline"], "interest": env["interest"],
         "collateral": env["collateral"], "evidence": env["evidence"]}, reuse=True)
     return out, env
 
 
-def propose_settlement_offer(conn, tenant_id, invoice_id, as_of: date, actor: str) -> dict:
+def propose_settlement_offer(conn, tenant_id, invoice_id, as_of: date, actor: str,
+                             model=None) -> dict:
     """The agent's draft: the settlement engine's letter, filled from the other engines' output,
     with the engine runs it relies on. One live offer per invoice; asking again returns it.
+    The letter prose is the model's when its draft passes the checks, else the plain template.
     Nothing is sent: a person approves first."""
     inv_id = _owned(conn, tenant_id, invoice_id)
     cur = conn.cursor(row_factory=dict_row)
@@ -469,11 +471,7 @@ def propose_settlement_offer(conn, tenant_id, invoice_id, as_of: date, actor: st
         return _action(live)
     out, env = _settlement_run(conn, tenant_id, inv_id, as_of)
     r = out["result"]
-    draft = {"offer": r["offer_display"], "floor": r["floor_display"], "as_of": r["as_of"],
-             "expires_on": (as_of + timedelta(days=OFFER_DAYS)).isoformat(),
-             "needs_lender_consent": r["needs_lender_consent"], "letter": r["letter"]["text"],
-             "cites": [_cite(e) for e in (env["eligibility"], env["deadline"], env["interest"],
-                                          env["collateral"], env["evidence"], out)]}
+    draft = _offer_draft(r, as_of, out, env, model)
     new = cur.execute(
         "INSERT INTO action_request (tenant_id, invoice_id, kind, draft, status, proposed_by, "
         "lender_consent_required) VALUES (%s,%s,'settlement_offer',%s::jsonb,'proposed',%s,%s) "
@@ -483,6 +481,43 @@ def propose_settlement_offer(conn, tenant_id, invoice_id, as_of: date, actor: st
         webhooks.publish(conn, tenant_id, "action.awaiting_lender",
                          {"invoice_id": str(inv_id), "action_id": str(new["id"])})
     return _action(new)
+
+
+def _offer_draft(r: dict, as_of: date, out: dict, env: dict, model) -> dict:
+    text, source = letter.draft_letter(model, r)
+    return {"offer": r["offer_display"], "floor": r["floor_display"], "as_of": r["as_of"],
+            "expires_on": (as_of + timedelta(days=OFFER_DAYS)).isoformat(),
+            "needs_lender_consent": r["needs_lender_consent"], "letter": text,
+            "letter_source": source, "discount_percent": r["discount_percent"],
+            "cites": [_cite(e) for e in (env["eligibility"], env["deadline"], env["interest"],
+                                         env["collateral"], env["evidence"], out)]}
+
+
+def set_discount(conn, tenant_id, action_id, user_id: str, role: str, percent, model=None,
+                 supplier_id: str | None = None) -> dict:
+    """The supplier's discount on statutory interest. The settlement engine recomputes the offer,
+    the floor check and the letter; earlier approvals were for different figures, so they clear.
+    A below-floor result now needs the lender's consent, and one at or above no longer does."""
+    try:
+        percent = str(Decimal(str(percent)))
+    except ArithmeticError:
+        raise ValueError("discount_percent must be a number") from None
+    with conn.transaction():
+        row = _lock_action(conn, tenant_id, action_id, role, supplier_id)
+        if row["kind"] != "settlement_offer":
+            raise ValueError("only a settlement offer takes a discount")
+        as_of = date.fromisoformat(row["draft"]["as_of"])
+        out, env = _settlement_run(conn, tenant_id, row["invoice_id"], as_of, percent)
+        r = out["result"]
+        draft = _offer_draft(r, as_of, out, env, model) | {"expires_on": row["draft"]["expires_on"]}
+        conn.execute("UPDATE action_request SET draft=%s::jsonb, approvals='[]'::jsonb, "
+                     "edit_difference=NULL, lender_consent_required=%s WHERE id=%s",
+                     (json.dumps(draft), r["needs_lender_consent"], row["id"]))
+        if r["needs_lender_consent"] and not row["lender_consent_required"]:
+            webhooks.publish(conn, tenant_id, "action.awaiting_lender",
+                             {"invoice_id": str(row["invoice_id"]), "action_id": str(row["id"])})
+        _audit_action(conn, tenant_id, role, user_id, "discount", row, discount_percent=percent)
+        return _fresh(conn, row["id"])
 
 
 def propose_dispute_pack(conn, tenant_id, invoice_id, as_of: date, actor: str) -> dict:
@@ -548,7 +583,8 @@ def list_actions(conn, tenant_id, status: str | None, role: str | None = None,
     return out
 
 
-NOT_EDITABLE = {"offer", "floor", "as_of", "expires_on", "needs_lender_consent", "cites", "pack"}
+NOT_EDITABLE = {"offer", "floor", "as_of", "expires_on", "needs_lender_consent", "cites", "pack",
+                "letter_source", "discount_percent"}
 
 
 def _lock_action(conn, tenant_id, action_id, role: str, supplier_id: str | None) -> dict:

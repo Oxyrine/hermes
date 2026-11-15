@@ -15,8 +15,8 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from psycopg.rows import dict_row
 
+from hermes import letter, statement, supplier, webhooks
 from hermes import portfolio as pf
-from hermes import statement, supplier, webhooks
 from hermes.ledger import bank_rates, db, ingest, onboarding, service, states
 from hermes.ledger.service import NotFound
 
@@ -26,7 +26,7 @@ OBJECT = re.compile(r"^/v1/(invoices|actions)/([0-9a-fA-F-]{36})(/|$)")
 TABLES = {"invoices": ("invoice", "invoice"), "actions": ("action_request", "action")}
 
 
-def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
+def create_app(dsn: str, secret: str, env: str = "production", model=None) -> FastAPI:
     app = FastAPI(title="Hermes", version="0.0.0")
 
     def conn():
@@ -302,8 +302,9 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
                          "odr_pack": service.propose_dispute_pack,
                          "gstr1a_draft": service.propose_gstr1a_draft}
             as_of = date.fromisoformat(body["as_of"]) if body.get("as_of") else service.today(c)
+            extra = (model,) if body["kind"] == "settlement_offer" else ()
             return proposers[body["kind"]](c, who["tenant"], invoice_id, as_of,
-                                           f"{who['role']}:{who['sub']}")
+                                           f"{who['role']}:{who['sub']}", *extra)
         except service.NotFound:
             raise HTTPException(404, "invoice not found") from None
         except states.Refused as e:
@@ -367,6 +368,11 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
     @app.post("/v1/actions/{action_id}/approve")
     def approve(action_id: str, who=Depends(caller), c=Depends(conn)):
         return decide(action_id, who, c, "decide_action", True)
+
+    @app.post("/v1/actions/{action_id}/discount")
+    def discount(action_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        """The supplier's discount on statutory interest; the engine recomputes the offer."""
+        return decide(action_id, who, c, "set_discount", body.get("discount_percent"), model)
 
     @app.post("/v1/actions/{action_id}/reject")
     def reject(action_id: str, body: dict = Body(default={}), who=Depends(caller), c=Depends(conn)):
@@ -577,7 +583,7 @@ def _from_env() -> FastAPI:
         "dev-only-secret-do-not-use-0123456789" if env == "development" else "")
     if not secret:
         raise RuntimeError("HERMES_TOKEN_SECRET must be set outside development")
-    return create_app(db.database_url(), secret, env)
+    return create_app(db.database_url(), secret, env, letter.client_from_env())
 
 
 def __getattr__(name):  # `uvicorn hermes.api:app` builds the app lazily; imports stay side-effect free
