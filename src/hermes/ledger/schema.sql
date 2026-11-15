@@ -139,7 +139,8 @@ CREATE TABLE idempotency_key (tenant_id UUID NOT NULL REFERENCES tenant, key TEX
 
 CREATE TABLE event_queue (id BIGSERIAL PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES tenant,
   invoice_id UUID, kind TEXT NOT NULL, payload JSONB, available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  claimed_at TIMESTAMPTZ, done_at TIMESTAMPTZ);
+  claimed_at TIMESTAMPTZ, done_at TIMESTAMPTZ,
+  attempts INT NOT NULL DEFAULT 0, dead_at TIMESTAMPTZ);   -- dead_at: set aside after 5 failed attempts
 
 CREATE TABLE model_cache (cache_key TEXT PRIMARY KEY, task TEXT NOT NULL, model TEXT NOT NULL,
   prompt_version TEXT NOT NULL, doc_hash CHAR(64), response JSONB NOT NULL,

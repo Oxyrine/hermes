@@ -11,13 +11,15 @@ import psycopg
 from psycopg.rows import dict_row
 
 from hermes import webhooks
-from hermes.agent import ScriptedAgent
+from hermes.agent import make_agent
 
 CLAIM = (
     "UPDATE event_queue SET claimed_at=now() WHERE id=(SELECT id FROM event_queue WHERE "
-    "done_at IS NULL AND claimed_at IS NULL AND available_at<=now() AND id <> ALL(%s) "
+    "done_at IS NULL AND dead_at IS NULL AND claimed_at IS NULL AND available_at<=now() AND id <> ALL(%s) "
     "ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1) "
     "RETURNING id, tenant_id::text, invoice_id::text, kind, payload")
+MAX_ATTEMPTS = 5
+RETRY_AFTER = "1 minute"
 LOCK = "SELECT pg_try_advisory_lock(hashtext(%s))"
 UNLOCK = "SELECT pg_advisory_unlock(hashtext(%s))"
 
@@ -34,20 +36,23 @@ def drain(dsn: str, secret: str, http) -> int:
                 continue
             token = jwt.encode({"sub": "scripted-agent", "tenant": ev["tenant_id"], "role": "agent",
                                 "exp": int(time.time()) + 300}, secret, algorithm="HS256")
-            agent, started, status = ScriptedAgent(http, token), time.monotonic(), "ok"
+            agent, started, status = make_agent(http, token), time.monotonic(), "ok"
             try:
                 agent.handle(ev)
                 c.execute("UPDATE event_queue SET done_at=now() WHERE id=%s", (ev["id"],))
                 done += 1
-            except Exception:
+            except Exception:  # noqa: BLE001  retry later; after MAX_ATTEMPTS set the event aside, never block the others
                 status = "failed"
-                raise
+                c.execute("UPDATE event_queue SET attempts=attempts+1, claimed_at=NULL, "
+                          "available_at=now()+%s::interval, dead_at=CASE WHEN attempts+1>=%s THEN now() END "
+                          "WHERE id=%s", (RETRY_AFTER, MAX_ATTEMPTS, ev["id"]))
+                skipped.append(ev["id"])  # not again in this drain
             finally:
                 c.execute(
-                    "INSERT INTO agent_run (tenant_id, invoice_id, runner, tool_calls, started_at, "
-                    "duration_ms, status) VALUES (%s,%s,'scripted',%s,now(),%s,%s)",
-                    (ev["tenant_id"], ev["invoice_id"], agent.tool_calls,
-                     int((time.monotonic() - started) * 1000), status))
+                    "INSERT INTO agent_run (tenant_id, invoice_id, runner, model, tokens_in, tokens_out, "
+                    "tool_calls, started_at, duration_ms, status) VALUES (%s,%s,%s,%s,%s,%s,%s,now(),%s,%s)",
+                    (ev["tenant_id"], ev["invoice_id"], agent.runner, agent.model_name, agent.tokens_in,
+                     agent.tokens_out, agent.tool_calls, int((time.monotonic() - started) * 1000), status))
                 c.execute(UNLOCK, (ev["invoice_id"],))
     return done
 
