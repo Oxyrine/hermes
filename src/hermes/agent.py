@@ -20,14 +20,9 @@ class ScriptedAgent:
          "payment.received": self.payment_received,
          "offer.expired": self.offer_expired,
          "bank_rate.changed": self.bank_rate_changed,
-<<<<<<< HEAD
-         "ims.action_changed": self.bank_rate_changed,  # the read re-runs evidence score and collateral
-         "invoice.hard_flag": self.hard_flag,
-         "source.record.ingested": lambda e: None,
-=======
          "ims.action_changed": self.ims_action_changed,
+         "invoice.hard_flag": self.hard_flag,
          "source.record.ingested": self.record_ingested,
->>>>>>> t30-gstr1a
          "action.approved": lambda e: None,
          "document.ingested": lambda e: None}[event["kind"]](event)  # published for later tickets (extraction) to act on
 
@@ -69,7 +64,6 @@ class ScriptedAgent:
         """Re-run interest and collateral as of the event date (the read does both); no state moves."""
         self.call("GET", f"/v1/invoices/{event['invoice_id']}", params={"as_of": event["payload"]["as_of"]})
 
-<<<<<<< HEAD
     def hard_flag(self, event: dict) -> None:
         """A hard flag on a funded invoice: re-read it (re-runs evidence and the collateral alert)
         and stop for a person by proposing a review, whatever the score."""
@@ -79,7 +73,7 @@ class ScriptedAgent:
             "flags": [f["kind"] for f in view["hard_flags"]],
             "alerts": (view["collateral"] or {}).get("alerts", []),
             "score": view["evidence"]["score"], "band": view["evidence"]["band"], "as_of": as_of}})
-=======
+
     def record_ingested(self, event: dict) -> None:
         if event["payload"]["source"] == "gstr1":
             self.gst_check(event)
@@ -104,4 +98,3 @@ class ScriptedAgent:
                 return
         if steps[:1] == ("gst_blocked",):
             self.call("POST", f"/v1/invoices/{inv}/actions", json={"kind": "gstr1a_draft", "as_of": as_of})
->>>>>>> t30-gstr1a
