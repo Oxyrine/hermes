@@ -251,6 +251,7 @@ def guard_facts(conn, tenant_id, invoice_id, as_of: date) -> dict:
             "matched": bool(conn.execute(
                 "SELECT 1 FROM evidence_item WHERE invoice_id=%s AND signal='irn_valid_matching'",
                 (view["id"],)).fetchone()),
+            "low_confidence": low_confidence(conn, view["id"]),
             "unpaid": unpaid > 0, "covered": covered, "has_advance": has_advance,
             "past_due": due is not None and as_of > due,
             "supplier_consent": bool(conn.execute(
@@ -261,10 +262,22 @@ def guard_facts(conn, tenant_id, invoice_id, as_of: date) -> dict:
                 "AND status='approved'", (view["id"],)).fetchone())}
 
 
+def low_confidence(conn, invoice_id) -> bool:
+    """An extraction on one of the invoice's documents failed a check or found a mismatch."""
+    return bool(conn.execute(
+        "SELECT 1 FROM document WHERE invoice_id=%s AND (COALESCE(jsonb_array_length("
+        "extracted->'review'),0)>0 OR COALESCE(jsonb_array_length(extracted->'mismatches'),0)>0)",
+        (invoice_id,)).fetchone())
+
+
 def move_state(conn, tenant_id, invoice_id, to: str, as_of: date, actor: str,
                extra: dict | None = None) -> None:
-    states.transition(conn, tenant_id, invoice_id, to,
-                      guard_facts(conn, tenant_id, invoice_id, as_of) | (extra or {}), actor)
+    if to == "needs_review" or (extra or {}).get("manual_review"):
+        # these guards read no engine, so they work before the contract and delivery arrive
+        facts = {"low_confidence": low_confidence(conn, invoice_id)}
+    else:
+        facts = guard_facts(conn, tenant_id, invoice_id, as_of)
+    states.transition(conn, tenant_id, invoice_id, to, facts | (extra or {}), actor)
 
 
 def record_advance(conn, tenant_id, invoice_id, principal: str, disbursed_on: date, actor: str):

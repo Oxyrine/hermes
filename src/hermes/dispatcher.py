@@ -24,7 +24,7 @@ LOCK = "SELECT pg_try_advisory_lock(hashtext(%s))"
 UNLOCK = "SELECT pg_advisory_unlock(hashtext(%s))"
 
 
-def drain(dsn: str, secret: str, http) -> int:
+def drain(dsn: str, secret: str, http, reader=None) -> int:
     """Process every claimable event; returns how many ran. Events whose invoice is locked by
     another run stay in the queue."""
     done, skipped = 0, [0]
@@ -36,7 +36,7 @@ def drain(dsn: str, secret: str, http) -> int:
                 continue
             token = jwt.encode({"sub": "scripted-agent", "tenant": ev["tenant_id"], "role": "agent",
                                 "exp": int(time.time()) + 300}, secret, algorithm="HS256")
-            agent, started, status = make_agent(http, token), time.monotonic(), "ok"
+            agent, started, status = make_agent(http, token, reader), time.monotonic(), "ok"
             try:
                 agent.handle(ev)
                 c.execute("UPDATE event_queue SET done_at=now() WHERE id=%s", (ev["id"],))

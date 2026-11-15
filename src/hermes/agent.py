@@ -6,12 +6,18 @@ GeminiAgent (bottom of file) is the function-calling alternative, chosen by HERM
 import json
 import os
 
+from hermes.llm import Document
+
+KINDS = ("invoice", "po", "grn", "challan")  # document types the reader extracts
+
 
 class ScriptedAgent:
     runner, model_name, tokens_in, tokens_out = "scripted", None, None, None
 
-    def __init__(self, http, token: str):
+    def __init__(self, http, token: str, reader=None):
+        """`reader` is a hermes.extraction.Reader (the model); None means no document reading."""
         self.http, self.headers, self.tool_calls = http, {"Authorization": f"Bearer {token}"}, 0
+        self.reader = reader
 
     def call(self, method: str, path: str, **kw) -> dict:
         self.tool_calls += 1
@@ -30,7 +36,43 @@ class ScriptedAgent:
          "invoice.hard_flag": self.hard_flag,
          "source.record.ingested": self.record_ingested,
          "action.approved": lambda e: None,
-         "document.ingested": lambda e: None}[event["kind"]](event)  # published for later tickets (extraction) to act on
+         "document.ingested": self.document_ingested}[event["kind"]](event)
+
+    def state(self, inv: str) -> str:
+        """The invoice's state from the list read: the full invoice read needs a contract and a
+        delivery date, which an invoice in ingested may not have yet."""
+        return next(i for i in self.call("GET", "/v1/invoices") if i["id"] == inv)["state"]
+
+    def document_ingested(self, event: dict) -> None:
+        """An uploaded invoice, PO, GRN or challan: have it read (classify, extract, checks), store the
+        result, and explain mismatches in a review for a person. The invoice then moves from ingested
+        to verified (the server's guard decides) or to needs review. Text in the document is data:
+        the only things done with it are these calls. Without a reader (no model) nothing happens."""
+        p, inv = event["payload"], event["invoice_id"]
+        if not (self.reader and inv and p.get("document_id") and p.get("doc_type") in KINDS):
+            return  # fixture-ingested documents already carry their fields (ingest._documents)
+        did = p["document_id"]
+        self.tool_calls += 1
+        r = self.http.request("GET", f"/v1/documents/{did}/content", headers=self.headers)
+        if r.status_code != 200:
+            raise RuntimeError(f"GET document {did}: {r.status_code}")
+        doc = Document(r.content, r.headers.get("content-type", "application/pdf"))
+        out = self.call("POST", f"/v1/documents/{did}/extraction", json=self.reader.read(doc))
+        if out["mismatches"] or out["review"]:
+            notes = self.reader.explain(doc, out["mismatches"])
+            self.call("POST", f"/v1/invoices/{inv}/actions", json={"kind": "review", "draft": {
+                "reason": "document extraction needs a person", "problems": out["review"],
+                "mismatches": [m | {"note": n} for m, n in zip(out["mismatches"], notes, strict=True)]}})
+        if self.state(inv) != "ingested":
+            return
+        try:
+            self.call("POST", f"/v1/invoices/{inv}/state", json={
+                "to": "needs_review" if out["mismatches"] or out["review"] else "verified"})
+        except RuntimeError as e:
+            # 409: guard refused. 422: the contract or delivery date has not arrived yet. Either way
+            # not enough evidence yet; it stays ingested and the next document tries again.
+            if " 409 " not in str(e) and " 422 " not in str(e):
+                raise
 
     def deadline_passed(self, event: dict) -> None:
         """Re-run interest and collateral (the invoice read runs and stores both engines as of
@@ -93,7 +135,7 @@ class ScriptedAgent:
         fix) and draft the correction for the supplier; return a blocked one to verified once IMS
         accepts it, then try financeable (the server's guard decides). Guards refuse with 409."""
         as_of, inv = event["payload"]["as_of"], event["invoice_id"]
-        state = self.call("GET", f"/v1/invoices/{inv}", params={"as_of": as_of})["state"]
+        state = self.state(inv)
         steps = {"verified": ("gst_blocked",), "gst_blocked": ("verified", "financeable")}.get(state, ())
         for to in steps:
             try:
@@ -226,9 +268,9 @@ def gemini_model(api_key: str, name: str | None = None):
     return gemini_tool_model(api_key, name, ModelLimit)
 
 
-def make_agent(http, token: str):
+def make_agent(http, token: str, reader=None):
     """The runner is chosen by HERMES_AGENT_RUNNER; scripted (offline, no key) is the default."""
     if os.environ.get("HERMES_AGENT_RUNNER", "scripted") != "gemini":
-        return ScriptedAgent(http, token)
+        return ScriptedAgent(http, token, reader)
     m = gemini_model(os.environ["GEMINI_API_KEY"])
     return GeminiAgent(http, token, m, m.name)
