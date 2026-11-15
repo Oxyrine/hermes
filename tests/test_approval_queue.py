@@ -117,9 +117,10 @@ def test_two_approver_item_shows_who_approved_and_who_is_outstanding(client, db,
 
 
 def test_an_edit_clears_earlier_approvals(client, who, inv):
-    a = propose(client, who, inv, "objection")
+    a = client.post(f"/v1/invoices/{inv}/actions", headers=who["agent"],
+                    json={"kind": "objection", "draft": {"raised_on": "2026-01-05"}}).json()
     post(client, who["supplier"], a, "approve")
-    r = post(client, who["hermes"], a, "edit", changes={"summary": "changed"})
+    r = post(client, who["hermes"], a, "edit", changes={"raised_on": "2026-01-06"})
     assert r.json()["approvals"] == [] and r.json()["needs"] == ["hermes_ops", "supplier"]
 
 

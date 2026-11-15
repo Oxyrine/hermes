@@ -6,9 +6,11 @@ GeminiAgent (bottom of file) is the function-calling alternative, chosen by HERM
 import json
 import os
 
+from hermes.facts import FactReader
 from hermes.llm import Document
 
 KINDS = ("invoice", "po", "grn", "challan")  # document types the reader extracts
+FACT_DOCS = ("email", "debit_note", "contract")  # read for an objection or a payment term (ticket 20)
 
 
 class ScriptedAgent:
@@ -35,7 +37,7 @@ class ScriptedAgent:
          "ims.action_changed": self.ims_action_changed,
          "invoice.hard_flag": self.hard_flag,
          "source.record.ingested": self.record_ingested,
-         "action.approved": lambda e: None,
+         "action.approved": self.action_approved,
          "document.ingested": self.document_ingested}[event["kind"]](event)
 
     def state(self, inv: str) -> str:
@@ -49,6 +51,8 @@ class ScriptedAgent:
         to verified (the server's guard decides) or to needs review. Text in the document is data:
         the only things done with it are these calls. Without a reader (no model) nothing happens."""
         p, inv = event["payload"], event["invoice_id"]
+        if self.reader and inv and p.get("document_id") and p.get("doc_type") in FACT_DOCS:
+            return self.read_fact(event)
         if not (self.reader and inv and p.get("document_id") and p.get("doc_type") in KINDS):
             return  # fixture-ingested documents already carry their fields (ingest._documents)
         did = p["document_id"]
@@ -73,6 +77,29 @@ class ScriptedAgent:
             # not enough evidence yet; it stays ingested and the next document tries again.
             if " 409 " not in str(e) and " 422 " not in str(e):
                 raise
+
+    def read_fact(self, event: dict) -> None:
+        """An email, debit note or contract: have the model look for an objection or a payment
+        term. It only ever proposes; a person confirms before any date moves."""
+        p, inv = event["payload"], event["invoice_id"]
+        did, kind = p["document_id"], p["doc_type"]
+        self.tool_calls += 1
+        r = self.http.request("GET", f"/v1/documents/{did}/content", headers=self.headers)
+        if r.status_code != 200:
+            raise RuntimeError(f"GET document {did}: {r.status_code}")
+        doc = Document(r.content, "text/plain" if kind == "email" else r.headers.get("content-type", "application/pdf"))
+        reader = FactReader(self.reader.client)
+        if kind == "contract":
+            self.call("POST", f"/v1/documents/{did}/contract-terms", json=reader.contract_terms(doc))
+            return
+        no = next(i for i in self.call("GET", "/v1/invoices") if i["id"] == inv)["invoice_no"]
+        self.call("POST", f"/v1/documents/{did}/objection", json=reader.objection(doc, [no]))
+
+    def action_approved(self, event: dict) -> None:
+        """A confirmed objection or payment term: re-read the invoice, which re-runs the deadline,
+        interest, evidence and collateral engines with it."""
+        if event["payload"]["kind"] in ("objection", "contract_terms"):
+            self.call("GET", f"/v1/invoices/{event['invoice_id']}")
 
     def deadline_passed(self, event: dict) -> None:
         """Re-run interest and collateral (the invoice read runs and stores both engines as of
