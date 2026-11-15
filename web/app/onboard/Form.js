@@ -8,7 +8,7 @@ export default function Form({ action, children, label }) {
   return (
     <form action={run} aria-busy={pending} style={{ display: "grid", gap: ".5rem", marginBottom: "2rem" }}>
       {children}
-      <button disabled={pending}>{pending ? "Working…" : label}</button>
+      <button disabled={pending} style={{ minHeight: 44 }}>{pending ? "Working…" : label}</button>
       {state && <p role={state.ok ? "status" : "alert"} style={{ color: state.ok ? "green" : "crimson" }}>{state.message}</p>}
     </form>
   );
