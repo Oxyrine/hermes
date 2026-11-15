@@ -1,4 +1,5 @@
 import { revalidatePath } from "next/cache";
+import { Fig } from "./Fig";
 
 // Invoice page. Server component: every figure is formatted by the API; nothing is computed here.
 export const dynamic = "force-dynamic";
@@ -97,16 +98,16 @@ export default async function Page() {
   return (
     <main style={{ fontFamily: "system-ui", maxWidth: 760, margin: "2rem auto", padding: "0 1rem" }}>
       <h1>Invoice {inv.invoice_no}</h1>
-      <p>Total Rs {inv.total} &middot; state {inv.state} &middot; eligibility {el.status} ({el.rule_version})</p>
+      <p>Total <Fig r={inv.sources.total}>{`Rs ${inv.total}`}</Fig> &middot; state {inv.state} &middot; eligibility <Fig r={inv.sources.eligibility}>{el.status}</Fig> ({el.rule_version})</p>
 
-      <h2>Evidence: score {ev.score}, band {ev.band}</h2>
+      <h2>Evidence: score <Fig r={inv.sources.score}>{String(ev.score)}</Fig>, band <Fig r={inv.sources.band}>{ev.band}</Fig></h2>
       <table>
         <thead><tr><th>Signal</th><th>Points</th><th>Source</th></tr></thead>
         <tbody>
           {ev.contributions.map((x, i) => (
             <tr key={i}>
               <td>{x.signal}</td><td>{x.points}</td>
-              <td><code>{JSON.stringify(x.source)}</code>{x.note ? ` (${x.note})` : ""}</td>
+              <td><Fig r={x.ref}>{x.ref ? x.ref.kind.replace("_", " ") : "no record"}</Fig> <code>{JSON.stringify(x.source)}</code>{x.note ? ` (${x.note})` : ""}</td>
             </tr>
           ))}
         </tbody>
@@ -114,9 +115,10 @@ export default async function Page() {
 
       <h2>Deadline working ({d.rule_version})</h2>
       <table><tbody>
-        <Row k="Acceptance" v={`${d.acceptance} (${d.basis})`} />
-        <Row k="Payment due" v={d.due} />
-        <Row k="Interest from" v={d.interest_from} />
+        <Row k="Acceptance" v={<Fig r={inv.sources.acceptance}>{`${d.acceptance} (${d.basis})`}</Fig>} />
+        <Row k="Payment due" v={<Fig r={inv.sources.due}>{d.due}</Fig>} />
+        <Row k="Delivery date" v={<Fig r={inv.sources.delivery_date}>{inv.delivery_date}</Fig>} />
+        <Row k="Interest from" v={<Fig r={inv.sources.interest_from}>{d.interest_from}</Fig>} />
       </tbody></table>
       <ul>{d.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
 
@@ -132,13 +134,13 @@ export default async function Page() {
             <>
               <p><strong>Dispute pack</strong> &middot; the supplier approves its release; a person files it
                 on the portal (Hermes submits nothing). <PackLinks id={a.id} /></p>
-              <p>Relies on: {a.draft.cites.map((c) => `${c.engine} ${c.rule_version}`).join(", ")}</p>
+              <p>Relies on: {a.sources.map((s) => <span key={s.id} style={{ marginRight: 8 }}><Fig r={s}>{`${s.engine} ${s.rule_version}`}</Fig></span>)}</p>
             </>
           ) : (<>
-          <p><strong>{a.kind}</strong> &middot; offer Rs {a.draft.offer} &middot; floor Rs {a.draft.floor}
+          <p><strong>{a.kind}</strong> &middot; offer <Fig r={a.sources.find((s) => s.engine === "settlement")}>{`Rs ${a.draft.offer}`}</Fig> &middot; floor <Fig r={a.sources.find((s) => s.engine === "settlement")}>{`Rs ${a.draft.floor}`}</Fig>
             {a.draft.needs_lender_consent ? " (needs lender consent)" : ""}</p>
           <pre style={{ whiteSpace: "pre-wrap" }}>{a.draft.letter}</pre>
-          <p>Relies on: {a.draft.cites.map((c) => `${c.engine} ${c.rule_version}`).join(", ")}</p>
+          <p>Relies on: {a.sources.map((s) => <span key={s.id} style={{ marginRight: 8 }}><Fig r={s}>{`${s.engine} ${s.rule_version}`}</Fig></span>)}</p>
           </>)}
           <button name="verb" value="approve">Approve</button>{" "}
           <button name="verb" value="reject">Reject</button>
@@ -153,10 +155,10 @@ export default async function Page() {
         <>
           <h2>Waterfall as of {inv.waterfall.as_of} ({inv.waterfall.rule_version})</h2>
           <table><tbody>
-            <Row k="Receipts" v={`Rs ${inv.waterfall.receipts}`} />
-            <Row k="To lender (exposure)" v={`Rs ${inv.waterfall.lender_exposure}`} />
-            <Row k="Agreed costs" v={`Rs ${inv.waterfall.costs}`} />
-            <Row k="To supplier (incl. all statutory interest)" v={`Rs ${inv.waterfall.supplier}`} />
+            <Row k="Receipts" v={<Fig r={inv.sources.waterfall}>{`Rs ${inv.waterfall.receipts}`}</Fig>} />
+            <Row k="To lender (exposure)" v={<Fig r={inv.sources.waterfall}>{`Rs ${inv.waterfall.lender_exposure}`}</Fig>} />
+            <Row k="Agreed costs" v={<Fig r={inv.sources.waterfall}>{`Rs ${inv.waterfall.costs}`}</Fig>} />
+            <Row k="To supplier (incl. all statutory interest)" v={<Fig r={inv.sources.waterfall}>{`Rs ${inv.waterfall.supplier}`}</Fig>} />
           </tbody></table>
         </>
       )}
@@ -175,11 +177,11 @@ export default async function Page() {
         <>
           <h2>Claim as of {c.as_of} ({c.rule_version})</h2>
           <table><tbody>
-            <Row k="Principal" v={`Rs ${c.principal}`} />
-            <Row k="Statutory interest" v={`Rs ${c.interest}`} />
-            <Row k="Claim value" v={`Rs ${c.claim_value}`} />
-            <Row k="Exposure" v={`Rs ${col.exposure}`} />
-            <Row k="Loan-to-value" v={col.ltv ?? "no advance"} />
+            <Row k="Principal" v={<Fig r={inv.sources.principal}>{`Rs ${c.principal}`}</Fig>} />
+            <Row k="Statutory interest" v={<Fig r={inv.sources.interest}>{`Rs ${c.interest}`}</Fig>} />
+            <Row k="Claim value" v={<Fig r={inv.sources.claim_value}>{`Rs ${c.claim_value}`}</Fig>} />
+            <Row k="Exposure" v={<Fig r={inv.sources.exposure}>{`Rs ${col.exposure}`}</Fig>} />
+            <Row k="Loan-to-value" v={<Fig r={inv.sources.ltv}>{col.ltv ?? "no advance"}</Fig>} />
           </tbody></table>
           <ul>{c.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
         </>

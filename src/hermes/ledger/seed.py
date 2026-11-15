@@ -81,7 +81,8 @@ def run(conn: psycopg.Connection) -> dict:
                    "VALUES (%s,%s,%s,%s,%s::jsonb) RETURNING id",
                    tenant, invoice, supplier, doc_type, json.dumps(extracted))
 
-    po, grn = doc("po", {"po_no": "PO-7781"}), doc("grn", {"delivery_date": "2026-08-01"})
+    po, grn = doc("po", {"po_no": "PO-7781"}), doc("grn", {"delivery_date": "2026-08-01", "sources": {
+        "grn_date": {"page": 1, "quote": "Goods received on 01-08-2026"}}})
     ims = conn.execute(
         "INSERT INTO ims_event (tenant_id, invoice_id, action, action_at, raw_ref, fetched_at) "
         "VALUES (%s,%s,'accepted','2026-08-20T10:00:00+05:30','ims:synthetic:2026-08',now()) "

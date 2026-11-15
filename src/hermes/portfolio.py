@@ -43,7 +43,8 @@ def _scan(conn, tenant, as_of: date):
             "claim_value": v["claim"]["claim_value"] if v["claim"] and v["eligibility"]["status"] != "ineligible" else None,
             "exposure": col and col["exposure"], "ltv": col and col["ltv"],
             "accepted": any(c["signal"] == "ims_accepted" for c in v["evidence"]["contributions"]),
-            "watchlist": i["buyer_id"] in watched, "alerts": kinds})
+            "watchlist": i["buyer_id"] in watched, "alerts": kinds,
+            "sources": {k: v["sources"].get(k) for k in ("total", "band", "due", "claim_value", "exposure", "ltv")}})
         alerts += [{"key": f"{k}:{i['id']}", "kind": k, "invoice_id": i["id"], "invoice_no": i["invoice_no"],
                     "buyer": i["buyer"], "message": MESSAGES[k]} for k in kinds]
     for r in conn.execute("SELECT effective_from, rate FROM bank_rate WHERE approved_by IS NOT NULL "

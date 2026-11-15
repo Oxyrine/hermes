@@ -1,4 +1,5 @@
 import { revalidatePath } from "next/cache";
+import { Fig } from "../Fig";
 
 // Lender portfolio, buyer watchlist and alerts. Development login only. Every figure is produced
 // by the API; nothing is computed here. Filters live in the address (?state=&band=&buyer=).
@@ -32,7 +33,7 @@ async function work(f) {
 const STATES = ["verified", "financeable", "advanced", "overdue", "settlement_offered", "odr_ready", "odr_filed", "awarded", "paid", "closed", "gst_blocked", "needs_review"];
 const th = { position: "sticky", top: 0, background: "#f4f4f4", textAlign: "left", padding: "6px 8px", whiteSpace: "nowrap" };
 const td = { padding: "6px 8px", borderTop: "1px solid #ddd", whiteSpace: "nowrap" };
-const dash = (v) => (v === null || v === undefined ? "\u2013" : v);
+const dash = (v, r) => (v === null || v === undefined ? "\u2013" : <Fig r={r}>{String(v)}</Fig>);
 
 export default async function Portfolio({ searchParams }) {
   const q = await searchParams;
@@ -64,9 +65,9 @@ export default async function Portfolio({ searchParams }) {
               <tr key={r.id}>
                 <td style={td}><a href={`/invoice/${r.id}`}>{r.supplier}</a></td>
                 <td style={td}>{r.watchlist && <span title="On watchlist">{"\u2605 "}</span>}{r.buyer}</td>
-                <td style={td}>{r.total}</td><td style={td}>{r.state}</td><td style={td}>{r.band}</td>
-                <td style={td}>{dash(r.days_late)}</td><td style={td}>{dash(r.claim_value)}</td>
-                <td style={td}>{dash(r.exposure)}</td><td style={td}>{dash(r.ltv)}</td>
+                <td style={td}>{dash(r.total, r.sources.total)}</td><td style={td}>{r.state}</td><td style={td}>{dash(r.band, r.sources.band)}</td>
+                <td style={td}>{dash(r.days_late, r.sources.due)}</td><td style={td}>{dash(r.claim_value, r.sources.claim_value)}</td>
+                <td style={td}>{dash(r.exposure, r.sources.exposure)}</td><td style={td}>{dash(r.ltv, r.sources.ltv)}</td>
                 <td style={td}>{r.alerts.join(", ") || "\u2013"}</td>
                 <td style={td}><form action={watch}><input type="hidden" name="buyer" value={r.buyer_id} /><input type="hidden" name="on" value={r.watchlist ? "0" : "1"} /><button type="submit">{r.watchlist ? "Unwatch" : "Watch"}</button></form></td>
               </tr>
