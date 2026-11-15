@@ -10,6 +10,7 @@ import jwt
 import psycopg
 from psycopg.rows import dict_row
 
+from hermes import webhooks
 from hermes.agent import ScriptedAgent
 
 CLAIM = (
@@ -58,4 +59,8 @@ if __name__ == "__main__":
 
     base = os.environ.get("HERMES_API_URL", "http://localhost:8000")
     secret = os.environ.get("HERMES_TOKEN_SECRET", "dev-only-secret-do-not-use-0123456789")
-    print(drain(db.database_url(), secret, httpx.Client(base_url=base)))
+    dsn = db.database_url()
+    print(drain(dsn, secret, httpx.Client(base_url=base)))
+    with psycopg.connect(dsn, autocommit=True) as wc:  # run often: deliveries are due within seconds
+        print(webhooks.deliver_due(wc, webhooks.signing_key(),
+                                   os.environ.get("HERMES_ENV") == "development"))

@@ -152,7 +152,12 @@ CREATE TABLE webhook_subscription (id UUID PRIMARY KEY DEFAULT gen_random_uuid()
 CREATE TABLE webhook_delivery (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenant, subscription_id UUID NOT NULL REFERENCES webhook_subscription,
   event TEXT NOT NULL, payload JSONB, attempts INT NOT NULL DEFAULT 0, next_attempt_at TIMESTAMPTZ,
-  delivered_at TIMESTAMPTZ, last_status INT);
+  delivered_at TIMESTAMPTZ, last_status INT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now());   -- next_attempt_at is NULL once delivered or given up
+
+CREATE TABLE webhook_attempt (id BIGSERIAL PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES tenant,
+  delivery_id UUID NOT NULL REFERENCES webhook_delivery, at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  status INT, error TEXT);   -- one row per delivery attempt
 
 CREATE TABLE clock (id BOOLEAN PRIMARY KEY DEFAULT true CHECK (id), today DATE NOT NULL);  -- development clock, at most one row
 

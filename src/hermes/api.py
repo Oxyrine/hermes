@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, Response
 from psycopg.rows import dict_row
 
 from hermes import portfolio as pf
-from hermes import statement, supplier
+from hermes import statement, supplier, webhooks
 from hermes.ledger import bank_rates, db, ingest, onboarding, service, states
 from hermes.ledger.service import NotFound
 
@@ -87,6 +87,8 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
             raw = b"".join([chunk async for chunk in response.body_iterator])
             ok = response.status_code < 300
             payload = json.loads(raw) if raw else None
+            logged = ({k: v for k, v in payload.items() if k != "secret"}
+                      if isinstance(payload, dict) else payload)  # a signing secret is never logged
             if ok:
                 _, _, after = snapshot(c, who["tenant"], path)
                 c.execute(
@@ -94,7 +96,7 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
                     "before, after) VALUES (%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)",
                     (who["tenant"], f"{who['role']}:{who['sub']}",
                      f"{request.method} {OBJECT.sub(lambda m: '/v1/' + m[1] + '/{id}' + m[3], path, 1)}",
-                     kind, oid, json.dumps(before), json.dumps(after if after is not None else payload)))
+                     kind, oid, json.dumps(before), json.dumps(after if after is not None else logged)))
             if key and ok:
                 c.execute("UPDATE idempotency_key SET response=%s::jsonb WHERE tenant_id=%s AND key=%s",
                           (json.dumps({"status": response.status_code, "body": payload}),
@@ -462,6 +464,18 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
         require(who, "lender_ops", "lender_approver")
         return refuse(pf.work_alert, c, who["tenant"], as_of or service.today(c), body.get("key"),
                       who["sub"], body.get("assignee") or "")
+
+    @app.post("/v1/webhooks")
+    def subscribe(body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        """The signing secret is in this response and nowhere else."""
+        require(who, "lender_ops", "lender_approver")
+        return refuse(webhooks.subscribe, c, who["tenant"], body.get("url"), body.get("events"),
+                      env == "development", webhooks.signing_key())
+
+    @app.get("/v1/webhooks")
+    def subscriptions(who=Depends(caller), c=Depends(conn)):
+        require(who, "lender_ops", "lender_approver")
+        return webhooks.list_subscriptions(c, who["tenant"])
 
     @app.get("/v1/me/invoices")
     def my_invoices(as_of: date | None = None, who=Depends(caller), c=Depends(conn)):

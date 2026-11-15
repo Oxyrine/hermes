@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from psycopg.rows import dict_row
 
+from hermes import webhooks
 from hermes.engines import collateral, deadline, eligibility, evidence, interest, settlement
 from hermes.engines.common import canonical_json
 from hermes.ledger import states
@@ -205,8 +206,12 @@ def raise_hard_flag(conn, tenant_id, invoice_id, kind: str, detail: dict | None 
                         (invoice_id, tenant_id)).fetchone():
         return False
     d = today(conn)
-    conn.execute("INSERT INTO hard_flag_event (tenant_id, invoice_id, kind, flagged_on, detail) "
-                 "VALUES (%s,%s,%s,%s,%s::jsonb)", (tenant_id, invoice_id, kind, d, json.dumps(detail or {})))
+    flag_id = conn.execute(
+        "INSERT INTO hard_flag_event (tenant_id, invoice_id, kind, flagged_on, detail) "
+        "VALUES (%s,%s,%s,%s,%s::jsonb) RETURNING id",
+        (tenant_id, invoice_id, kind, d, json.dumps(detail or {}))).fetchone()[0]
+    webhooks.publish(conn, tenant_id, "invoice.hard_flag",
+                     {"invoice_id": str(invoice_id), "flag_id": flag_id})
     conn.execute("INSERT INTO event_queue (tenant_id, invoice_id, kind, payload) "
                  "VALUES (%s,%s,'invoice.hard_flag',%s::jsonb)",
                  (tenant_id, invoice_id, json.dumps({"flag": kind, "as_of": d.isoformat()})))
@@ -305,6 +310,12 @@ def tick(conn, d: date) -> dict:
                 (inv, tenant, d, v["claim"]["claim_value"], v["collateral"]["exposure"],
                  v["collateral"]["ltv"], v["evidence"]["score"], v["evidence"]["band"]))
             snapped += 1
+            if "ltv_above_band_limit" in v["collateral"]["alerts"] and not conn.execute(
+                "SELECT 1 FROM webhook_delivery WHERE event='collateral.ltv_breach' AND "
+                "payload->>'invoice_id'=%s AND payload->>'as_of'=%s", (inv, d.isoformat())
+            ).fetchone():  # ponytail: while the breach lasts this repeats daily, a standing reminder
+                webhooks.publish(conn, tenant, "collateral.ltv_breach",
+                                 {"invoice_id": inv, "as_of": d.isoformat()})
     for inv, tenant in conn.execute(
         "UPDATE action_request SET status='expired' WHERE kind='settlement_offer' AND "
         "status='approved' AND (draft->>'expires_on')::date < %s RETURNING invoice_id::text, "
@@ -466,6 +477,9 @@ def propose_settlement_offer(conn, tenant_id, invoice_id, as_of: date, actor: st
         "lender_consent_required) VALUES (%s,%s,'settlement_offer',%s::jsonb,'proposed',%s,%s) "
         "RETURNING *", (tenant_id, inv_id, json.dumps(draft), actor,
                         r["needs_lender_consent"])).fetchone()
+    if r["needs_lender_consent"]:
+        webhooks.publish(conn, tenant_id, "action.awaiting_lender",
+                         {"invoice_id": str(inv_id), "action_id": str(new["id"])})
     return _action(new)
 
 
