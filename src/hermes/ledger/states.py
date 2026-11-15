@@ -8,6 +8,8 @@ import json
 
 from psycopg.rows import dict_row
 
+from hermes import webhooks
+
 TABLE = {
     ("ingested", "verified"): lambda f: bool(f.get("matched")),
     ("ingested", "needs_review"): lambda f: bool(f.get("low_confidence")),
@@ -54,3 +56,4 @@ def transition(conn, tenant_id, invoice_id, to: str, facts: dict, actor: str) ->
             "VALUES (%s,%s,'state_change','invoice',%s,%s::jsonb,%s::jsonb)",
             (tenant_id, actor, invoice_id, json.dumps({"state": row["state"]}),
              json.dumps({"state": to})))
+        webhooks.publish(conn, tenant_id, "invoice.state_changed", {"invoice_id": str(invoice_id)})
