@@ -4,7 +4,7 @@
 
 **Blocked by:** 34
 
-**Status:** ready-for-human
+**Status:** wontfix (deferred: run locally for now; revisit for cloud later)
 
 Also blocked on something outside the tickets: a Google Cloud project with billing enabled, which the owner must create. Nothing here starts until it exists.
 
