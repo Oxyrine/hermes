@@ -17,7 +17,7 @@ from psycopg.rows import dict_row
 
 from hermes import letter, statement, supplier, webhooks
 from hermes import portfolio as pf
-from hermes.ledger import bank_rates, db, extract, ingest, onboarding, service, states
+from hermes.ledger import bank_rates, db, extract, ingest, onboarding, service, sources, states
 from hermes.ledger.service import NotFound
 
 TOKEN_TTL_SECONDS = 8 * 3600
@@ -568,6 +568,21 @@ def create_app(dsn: str, secret: str, env: str = "production", model=None) -> Fa
             raise HTTPException(404, "invoice not found") from None
         audit_read(c, who, "documents", invoice_id)
         return out
+
+    @app.get("/v1/sources/{kind}/{ref_id}")
+    def source(kind: str, ref_id: str, who=Depends(caller), c=Depends(conn)):
+        """Open a figure's source: the engine run, document, IMS event, payment or other record."""
+        require(who, "lender_ops", "lender_approver", "hermes_ops", "supplier", "agent")
+        out = refuse(sources.resolve, c, who["tenant"], kind, ref_id, mine(who))
+        if out.get("invoice_id"):
+            audit_read(c, who, f"source:{kind}", out["invoice_id"])
+        return out
+
+    @app.post("/v1/engine-runs/{run_id}/recompute")
+    def recompute(run_id: str, who=Depends(caller), c=Depends(conn)):
+        """Re-run a stored engine run from its stored inputs and say whether the output matches."""
+        require(who, "lender_ops", "lender_approver", "hermes_ops", "supplier", "agent")
+        return refuse(sources.recompute, c, who["tenant"], run_id, mine(who))
 
     @app.post("/v1/engines/{engine}/run")
     def run_engine(engine: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):

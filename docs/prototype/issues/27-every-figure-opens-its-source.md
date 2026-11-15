@@ -4,13 +4,13 @@
 
 **Blocked by:** 18, 25
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Every extracted value on the invoice page opens its document at the right page with the quote shown
-- [ ] Every computed value (due date, interest, claim, exposure, loan-to-value, score) opens its engine run: engine, rule version, inputs and reasons
-- [ ] Each evidence contribution opens its source record (IMS event, document, payment)
-- [ ] Rules awaiting legal review are marked as provisional where their result is shown
-- [ ] The API can recompute an engine run from its stored inputs and report whether the output matches
-- [ ] The same behaviour is available from the portfolio, the approval queue and the invoice page
-- [ ] The source panel works by keyboard and at phone width
-- [ ] A test through the API asserts that every figure in the invoice read response carries a source reference that resolves
+- [x] Every extracted value on the invoice page opens its document at the right page with the quote shown
+- [x] Every computed value (due date, interest, claim, exposure, loan-to-value, score) opens its engine run: engine, rule version, inputs and reasons
+- [x] Each evidence contribution opens its source record (IMS event, document, payment)
+- [x] Rules awaiting legal review are marked as provisional where their result is shown
+- [x] The API can recompute an engine run from its stored inputs and report whether the output matches
+- [x] The same behaviour is available from the portfolio, the approval queue and the invoice page
+- [ ] The source panel works by keyboard and at phone width (links and a plain page, no scripts; phone-width visual check not done, web app not built or viewed here)
+- [x] A test through the API asserts that every figure in the invoice read response carries a source reference that resolves

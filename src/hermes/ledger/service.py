@@ -67,6 +67,27 @@ def run_engine(conn, tenant_id, invoice_id, engine: str, inputs: dict, *, reuse:
     return out
 
 
+def run_ref(conn, tenant_id, invoice_id, engine: str, input_hash: str) -> dict | None:
+    """The source reference to a stored engine run: what a figure computed by it opens."""
+    row = conn.execute(
+        "SELECT id::text, rule_version, outputs->'reasons' FROM engine_run WHERE tenant_id=%s AND "
+        "invoice_id IS NOT DISTINCT FROM %s AND engine=%s AND inputs_hash=%s "
+        "ORDER BY run_at DESC LIMIT 1", (tenant_id, invoice_id, engine, input_hash)).fetchone()
+    return row and {"kind": "engine_run", "id": row[0], "engine": engine, "rule_version": row[1],
+                    "input_hash": input_hash,
+                    "provisional": any("Awaiting legal review" in r for r in row[2] or [])}
+
+
+def _field_ref(doc: dict | None, field: str) -> dict | None:
+    """Where an extracted value was read: the document, page and quote."""
+    if doc is None:
+        return None
+    srcs = doc["extracted"].get("sources") or {}
+    s = srcs.get(field) or (srcs.get(f"{doc['doc_type']}_date") if field == "delivery_date" else None) or {}
+    return {"kind": "document", "id": doc["id"], "doc_type": doc["doc_type"], "field": field,
+            "page": s.get("page"), "quote": s.get("quote")}
+
+
 def list_invoices(conn, tenant_id, supplier_id=None) -> list[dict]:
     return conn.cursor(row_factory=dict_row).execute(
         "SELECT id::text, invoice_no, total::text, state FROM invoice WHERE tenant_id=%s "
@@ -88,6 +109,16 @@ def documents(conn, tenant_id, invoice_id) -> list[dict]:
     return conn.cursor(row_factory=dict_row).execute(
         "SELECT id::text, doc_type, extracted FROM document WHERE invoice_id=%s AND tenant_id=%s "
         "ORDER BY doc_type", (inv, tenant_id)).fetchall()
+
+
+def _evidence_ref(source: dict | None, item_id: str | None) -> dict | None:
+    """The record an evidence contribution came from: IMS event, document, payment, raw record,
+    else the evidence item itself."""
+    for key, kind in (("ims_event_id", "ims_event"), ("document_id", "document"),
+                      ("payment_id", "payment"), ("raw_id", "raw_record")):
+        if source and source.get(key):
+            return {"kind": kind, "id": str(source[key])}
+    return item_id and {"kind": "evidence_item", "id": item_id}
 
 
 def _section(env: dict, **fields) -> dict:
@@ -117,12 +148,15 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
                       (inv["supplier_id"], tenant_id)).fetchone()
     con = cur.execute("SELECT * FROM contract WHERE id=%s AND tenant_id=%s",
                       (inv["contract_id"], tenant_id)).fetchone()
-    grn = cur.execute("SELECT extracted FROM document WHERE invoice_id=%s AND tenant_id=%s "
+    grn = cur.execute("SELECT id::text, doc_type, extracted FROM document WHERE invoice_id=%s AND tenant_id=%s "
                       "AND extracted->>'delivery_date' IS NOT NULL ORDER BY doc_type, id LIMIT 1",
                       (invoice_id, tenant_id)).fetchone()  # a challan's date first, then the GRN's
+    idoc = cur.execute("SELECT id::text, doc_type, extracted FROM document WHERE invoice_id=%s AND "
+                       "tenant_id=%s AND doc_type='invoice' AND extracted IS NOT NULL ORDER BY id "
+                       "LIMIT 1", (invoice_id, tenant_id)).fetchone()
     cls = cur.execute("SELECT class FROM udyam_classification WHERE supplier_id=%s AND fy=%s "
                       "AND tenant_id=%s", (sup["id"], fy_of(con["signed_date"]), tenant_id)).fetchone()
-    items = cur.execute("SELECT signal, source_ref, value FROM evidence_item WHERE invoice_id=%s AND "
+    items = cur.execute("SELECT id::text, signal, source_ref, value FROM evidence_item WHERE invoice_id=%s AND "
                         "tenant_id=%s ORDER BY detected_at, id", (invoice_id, tenant_id)).fetchall()
     last_ims = max((n for n, i in enumerate(items) if i["signal"].startswith("ims_")), default=None)
     items = [i for n, i in enumerate(items) if not i["signal"].startswith("ims_") or n == last_ims]
@@ -137,12 +171,24 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
                         "tenant_id=%s ORDER BY id", (invoice_id, tenant_id)).fetchall()
 
     env = {} if env is None else env
+    runs: dict = {}
 
     def run(engine, inputs):
         env[engine] = run_engine(conn, tenant_id, invoice_id, engine, inputs, reuse=True)
+        runs[engine] = run_ref(conn, tenant_id, invoice_id, engine, env[engine]["input_hash"])
         return env[engine]
 
     delivery = grn["extracted"]["delivery_date"]
+    # figure -> source reference: extracted values open a document page and quote, computed ones an engine run
+    refs: dict = {}
+    inv_ref = {"kind": "invoice", "id": invoice_id}
+    for f in ("total", "invoice_no"):
+        refs[f] = _field_ref(idoc, f) if idoc and f in idoc["extracted"] else inv_ref
+    refs["delivery_date"] = _field_ref(grn, "delivery_date")
+    if con["terms_source"]:
+        refs["written_days"] = {"kind": "contract", "id": str(con["id"]),
+                                "page": con["terms_source"].get("page"),
+                                "quote": con["terms_source"].get("quote")}
     elig = run("eligibility", {
         "udyam_urn": sup["udyam_urn"], "registration_date": sup["udyam_reg_date"].isoformat(),
         "enterprise_type": sup["enterprise_type"], "classification": cls["class"] if cls else None,
@@ -161,8 +207,19 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
         "evidence": _section(ev, **ev["result"]),
         "hard_flags": [{"kind": f["kind"], "flagged_on": f["flagged_on"].isoformat()} for f in flags],
         "needs_review": ev["result"]["needs_review"] or bool(flags),
-        "claim": None, "collateral": None,
+        "claim": None, "collateral": None, "sources": refs, "delivery_date": delivery,
     }
+    ids = {(i["signal"], canonical_json(i["source_ref"])): i["id"] for i in items}
+    # each contribution opens its own source record; copies, so the stored engine result is untouched
+    out["evidence"]["contributions"] = [
+        {**x, "ref": _evidence_ref(x["source"], ids.get((x["signal"], canonical_json(x["source"]))))}
+        for x in out["evidence"]["contributions"]]
+    refs |= {"eligibility": runs["eligibility"], "acceptance": runs["deadline"],
+             "due": runs["deadline"], "interest_from": runs["deadline"],
+             "score": runs["evidence"], "band": runs["evidence"]}
+    if out["waterfall"]:
+        refs["waterfall"] = run_ref(conn, tenant_id, invoice_id, "collateral",
+                                    out["waterfall"]["input_hash"])
     if dl["result"]["status"] != "ok":
         return out
 
@@ -193,6 +250,9 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
     out["claim"] = _section(
         stat or col, as_of=as_of.isoformat(), principal=str(unpaid.quantize(CENT)),
         interest=str((claim_value - unpaid).quantize(CENT)), claim_value=cr["claim_display"])
+    refs |= {k: runs["interest"] if stat else runs["collateral"]
+             for k in ("principal", "interest", "claim_value")}
+    refs |= {k: runs["collateral"] for k in ("exposure", "ltv")}
     out["collateral"] = _section(col, exposure=cr["exposure_display"], ltv=cr["ltv"],
                                  advance_rate=cr["advance_rate"], alerts=cr["alerts"])
     return out
@@ -589,6 +649,8 @@ def list_actions(conn, tenant_id, status: str | None, role: str | None = None,
         ids = (r["draft"] or {}).get("document_ids") or [x[0] for x in conn.execute(
             "SELECT DISTINCT source_ref->>'document_id' FROM evidence_item WHERE invoice_id=%s "
             "AND source_ref ? 'document_id'", (r["invoice_id"],))]
+        a["sources"] = [x for x in (run_ref(conn, tenant_id, r["invoice_id"], c["engine"], c["input_hash"])
+                                    for c in (r["draft"] or {}).get("cites") or []) if x]
         a["documents"] = [{"id": x[0], "doc_type": x[1]} for x in conn.execute(
             "SELECT id::text, doc_type FROM document WHERE tenant_id=%s AND id::text = ANY(%s)",
             (tenant_id, ids))]
