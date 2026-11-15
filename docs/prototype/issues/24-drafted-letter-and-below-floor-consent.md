@@ -4,15 +4,15 @@
 
 **Blocked by:** 12, 17
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The model writes prose containing placeholders only; numbers are filled by the template from engine output
-- [ ] A draft containing a digit not present in the engine output is rejected and the plain template is used instead
-- [ ] A draft containing a banned phrase (a threat or a legal conclusion) is rejected and the plain template is used instead
-- [ ] The letter states the neutral notes from the buyer statement and nothing stronger
-- [ ] The supplier can set a discount on statutory interest; the offer amount is recomputed by the engine, not in the browser
-- [ ] An offer below the floor is held, flagged as needing lender consent, and appears in the lender's queue
-- [ ] The offer can be approved for sending only after the lender consents; consent records who and when
-- [ ] An offer at or above the floor needs only the supplier's approval
-- [ ] With no key or an exhausted limit, the plain template is used and the flow still completes
-- [ ] Tests through the API cover: clean draft accepted, stray digit rejected, banned phrase rejected, below-floor held then released
+- [x] The model writes prose containing placeholders only; numbers are filled by the template from engine output
+- [x] A draft containing a digit not present in the engine output is rejected and the plain template is used instead
+- [x] A draft containing a banned phrase (a threat or a legal conclusion) is rejected and the plain template is used instead
+- [x] The letter states the neutral notes from the buyer statement and nothing stronger
+- [x] The supplier can set a discount on statutory interest; the offer amount is recomputed by the engine, not in the browser
+- [x] An offer below the floor is held, flagged as needing lender consent, and appears in the lender's queue
+- [x] The offer can be approved for sending only after the lender consents; consent records who and when
+- [x] An offer at or above the floor needs only the supplier's approval
+- [x] With no key or an exhausted limit, the plain template is used and the flow still completes
+- [x] Tests through the API cover: clean draft accepted, stray digit rejected, banned phrase rejected, below-floor held then released
