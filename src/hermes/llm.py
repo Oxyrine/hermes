@@ -215,3 +215,39 @@ class ModelClient:
                 if e.daily or delay is None:
                     raise RateLimited(daily=e.daily) from None
                 self.sleep(delay)
+
+
+def gemini_tool_model(api_key: str, name: str | None, limit_exc: type[Exception]):
+    """The real model: Gemini generateContent over REST on the pinned Flash model, one call per turn.
+    ponytail: no cache or backoff here; the loop retries failed events itself."""
+    import httpx
+
+    name = name or PINS["flash"]
+
+    def model(system: str, msgs: list[dict], decls: list[dict]) -> dict:
+        contents = []
+        for m in msgs:
+            if m["role"] == "tool":
+                part = {"functionResponse": {"name": m["name"], "response": m["result"]}}
+                contents.append({"role": "user", "parts": [part]})
+            else:
+                parts = [{"text": m["text"]}] if m.get("text") else []
+                parts += [{"functionCall": {"name": c["name"], "args": c.get("args") or {}}} for c in m.get("calls", [])]
+                contents.append({"role": m["role"], "parts": parts})
+        r = httpx.post(f"https://generativelanguage.googleapis.com/v1beta/models/{name}:generateContent",
+                       headers={"x-goog-api-key": api_key}, timeout=60,
+                       json={"systemInstruction": {"parts": [{"text": system}]}, "contents": contents,
+                             "tools": [{"functionDeclarations": decls}]})
+        if r.status_code == 429:
+            raise limit_exc(r.text)
+        r.raise_for_status()
+        body = r.json()
+        parts = body["candidates"][0]["content"].get("parts", [])
+        use = body.get("usageMetadata", {})
+        return {"calls": [{"name": p["functionCall"]["name"], "args": p["functionCall"].get("args", {})}
+                          for p in parts if "functionCall" in p],
+                "text": "".join(p.get("text", "") for p in parts),
+                "tokens_in": use.get("promptTokenCount"), "tokens_out": use.get("candidatesTokenCount")}
+
+    model.name = name
+    return model
