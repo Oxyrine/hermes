@@ -17,7 +17,7 @@ from psycopg.rows import dict_row
 
 from hermes import portfolio as pf
 from hermes import statement, supplier, webhooks
-from hermes.ledger import bank_rates, db, ingest, onboarding, service, states
+from hermes.ledger import bank_rates, db, extract, ingest, onboarding, service, states
 from hermes.ledger.service import NotFound
 
 TOKEN_TTL_SECONDS = 8 * 3600
@@ -226,7 +226,7 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
     @app.get("/v1/documents/{document_id}/content")
     def download(document_id: str, who=Depends(caller), c=Depends(conn)):
         """Never public: an authorised caller, scoped to their own supplier, and the read is audited."""
-        require(who, "supplier", "lender_ops", "lender_approver", "hermes_ops")
+        require(who, "supplier", "lender_ops", "lender_approver", "hermes_ops", "agent")
         _, kind, data = refuse(onboarding.fetch_document, c, who["tenant"], document_id, mine(who))
         c.execute("INSERT INTO audit_log (tenant_id, actor, action, object_type, object_id) "
                   "VALUES (%s,%s,'read:document','document',%s)",
@@ -234,6 +234,30 @@ def create_app(dsn: str, secret: str, env: str = "production") -> FastAPI:
         return Response(data, media_type=kind, headers={
             "content-disposition": 'attachment; filename="document"',
             "x-content-type-options": "nosniff", **NOINDEX})
+
+    @app.post("/v1/documents/{document_id}/extraction")
+    def extraction(document_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):
+        """The agent's write path for a document it read; the checks run again here."""
+        require(who, "agent", "hermes_ops")
+        try:
+            return extract.store_extraction(c, who["tenant"], document_id, body,
+                                            f"{who['role']}:{who['sub']}")
+        except (service.NotFound, onboarding.NotFound):
+            raise HTTPException(404, "document not found") from None
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(422, f"bad extraction: {e}") from None
+
+    @app.post("/v1/invoices/{invoice_id}/resolve-review")
+    def resolve_review(invoice_id: str, who=Depends(caller), c=Depends(conn)):
+        """A person looked at an invoice in needs review and returns it to verified."""
+        require(who, "lender_ops", "hermes_ops")
+        try:
+            extract.resolve_review(c, who["tenant"], invoice_id, f"user:{who['sub']}")
+            return {"state": "verified"}
+        except service.NotFound:
+            raise HTTPException(404, "invoice not found") from None
+        except states.Refused as e:
+            raise HTTPException(409, str(e)) from None
 
     @app.post("/v1/invoices/{invoice_id}/waterfall")
     def waterfall(invoice_id: str, body: dict = Body(...), who=Depends(caller), c=Depends(conn)):

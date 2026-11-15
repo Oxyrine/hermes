@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 from hermes import webhooks
 
 TABLE = {
-    ("ingested", "verified"): lambda f: bool(f.get("matched")),
+    ("ingested", "verified"): lambda f: bool(f.get("matched")) and not f.get("low_confidence"),
     ("ingested", "needs_review"): lambda f: bool(f.get("low_confidence")),
     ("needs_review", "verified"): lambda f: bool(f.get("manual_review")),
     ("verified", "gst_blocked"): lambda f: bool(f.get("ims_blocked")),
