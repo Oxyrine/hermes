@@ -176,6 +176,7 @@ def test_no_code_path_contacts_the_dispute_portal():
     import hermes
 
     src = "\n".join(p.read_text(encoding="utf-8").lower()
+                    .replace('httpx.post(f"https://generativelanguage', "")  # agent.py's Gemini call, ticket 22
                     for p in pathlib.Path(hermes.__file__).parent.rglob("*.py")
                     if p.name != "webhooks.py")  # the one outbound caller: lender endpoints, ticket 33
     for needle in ("httpx.post", "requests.", "urllib", "odr.msme", "samadhaan", "socket"):
