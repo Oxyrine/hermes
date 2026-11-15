@@ -1,0 +1,27 @@
+# Gemini model pins (ticket 02). Single source of truth: ticket 17 (hermes.llm) reads [models].
+# Free tier only. No Pro model anywhere. Re-check the AI Studio model list before each release.
+# Verified against the owner's key on 2026-11-15 via GET /v1beta/models.
+#
+# Limits: Google does not publish per-model free-tier RPM/RPD in the docs; they are shown per
+# project in AI Studio (aistudio.google.com/rate-limit). Observed on 2026-11-15: no rate-limit
+# headers are returned. Treat as the Gemini free-tier defaults below until AI Studio says otherwise,
+# and keep calls cached/capped (ticket 17).
+# Free-tier input/output is free of charge for both models (pricing page, Standard tab).
+
+[models]
+flash = "gemini-3.8-flash"            # contract terms, objections, mismatch notes, drafting, agent reasoning
+flash_lite = "gemini-3.5-flash-lite"  # classification / extraction; escalate to flash on low confidence
+
+[limits.flash]
+note = "AI Studio per-project; shared free pool. Capacity-limited: gemini-3.8-flash read-timed-out at 100s and gemini-3.7-flash returned 503 'high demand' on 2026-11-15."
+rpm = "see AI Studio"
+rpd = "see AI Studio"
+
+[limits.flash_lite]
+note = "AI Studio per-project. A tiny generateContent call returned 200 in about 1s on 2026-11-15."
+rpm = "see AI Studio"
+rpd = "see AI Studio"
+
+[managed_agent]
+enabled = false  # flipped by ticket 17 only if the ticket-02 spike outcome in docs/adr/0002 says it works
+base_agent = "antigravity-preview-09-2026"
