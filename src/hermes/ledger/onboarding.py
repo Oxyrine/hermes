@@ -10,7 +10,7 @@ from decimal import Decimal, InvalidOperation
 from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 
-from hermes.ledger import states
+from hermes.ledger import service, states
 from hermes.ledger.service import NotFound
 from hermes.synthetic.gstin import is_valid_gstin
 
@@ -205,6 +205,8 @@ def upload_document(conn, tenant_id, filename, content_type, data: bytes, doc_ty
                  "VALUES (%s,%s,'document.ingested',%s::jsonb)",
                  (tenant_id, iid, json.dumps({"document_id": did, "doc_type": doc_type,
                                               "supplier_id": sid})))
+    if doc_type == "debit_note" and iid:  # a buyer's debit note against the invoice
+        service.raise_hard_flag(conn, tenant_id, iid, "debit_note", {"document_id": did})
     return {"id": did, "doc_type": doc_type, "invoice_id": iid, "supplier_id": sid,
             "sha256": digest, "size_bytes": len(data)}
 
