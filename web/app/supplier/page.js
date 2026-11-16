@@ -53,9 +53,9 @@ export default async function Supplier() {
     return <main style={{ fontFamily: "system-ui", padding: "1rem" }}><h1>Your invoices</h1><p role="alert">Could not load: {e.message}</p></main>;
   }
   return (
-    <main style={{ fontFamily: "system-ui", maxWidth: 480, margin: "0 auto", padding: "1rem", boxSizing: "border-box" }}>
+    <main style={{ fontFamily: "system-ui", maxWidth: 480, margin: "0 auto", padding: "1rem", boxSizing: "border-box", overflowWrap: "anywhere" }}>
       <h1>Your invoices</h1>
-      <p><a href="/onboard">Set up your business, consents and Udyam certificate</a></p>
+      <p><a href="/onboard">Onboarding: GSTIN, Udyam certificate, consent for each data source</a></p>
 
       {invoices.length === 0 && <p>No invoices yet.</p>}
       {invoices.map((v) => (
@@ -85,7 +85,14 @@ export default async function Supplier() {
       {actions.map((a) => (
         <form key={a.id} action={decide} style={card}>
           <input type="hidden" name="id" value={a.id} />
-          {a.kind === "odr_pack" ? (
+          {a.kind === "gstr1a_draft" ? (
+            <>
+              <p><strong>Fix it: correction draft.</strong> {a.draft.filed.what}. Hermes files nothing; give this to your accountant.</p>
+              <p>Should have been: {a.draft.should_have_been.table} table{a.draft.should_have_been.buyer_gstin ? `, buyer GSTIN ${a.draft.should_have_been.buyer_gstin}` : ""}.</p>
+              <details open><summary>Steps to amend</summary><ol>{a.draft.steps.map((t) => <li key={t}>{t}</li>)}</ol></details>
+              <p style={{ fontSize: ".9em" }}>{a.draft.rule}. {a.draft.note}</p>
+            </>
+          ) : a.kind === "odr_pack" ? (
             <p><strong>Dispute pack.</strong> Approving releases it; a person files it, Hermes submits nothing.{" "}
               <a href={`/pack/${a.id}/pdf`}>Full document (PDF)</a></p>
           ) : (
@@ -95,8 +102,8 @@ export default async function Supplier() {
             </>
           )}
           <p style={{ fontSize: ".9em" }}>Talk to your accountant or a lawyer before you decide.</p>
-          <button name="verb" value="approve" style={{ minHeight: 44 }}>Approve</button>{" "}
-          <button name="verb" value="reject" style={{ minHeight: 44 }}>Reject</button>
+          <button name="verb" value="approve" style={{ minHeight: 44 }}>{a.kind === "gstr1a_draft" ? "Got it" : "Approve"}</button>{" "}
+          <button name="verb" value="reject" style={{ minHeight: 44 }}>{a.kind === "gstr1a_draft" ? "Dismiss" : "Reject"}</button>
         </form>
       ))}
     </main>

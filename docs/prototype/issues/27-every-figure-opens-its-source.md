@@ -12,5 +12,5 @@
 - [x] Rules awaiting legal review are marked as provisional where their result is shown
 - [x] The API can recompute an engine run from its stored inputs and report whether the output matches
 - [x] The same behaviour is available from the portfolio, the approval queue and the invoice page
-- [ ] The source panel works by keyboard and at phone width (links and a plain page, no scripts; phone-width visual check not done, web app not built or viewed here)
+- [x] The source panel works by keyboard and at phone width (links and a plain page, no scripts; checked in headless Chromium at 400 px against a stub API: no horizontal overflow, recompute button reachable and operable by keyboard)
 - [x] A test through the API asserts that every figure in the invoice read response carries a source reference that resolves

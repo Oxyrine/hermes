@@ -62,7 +62,7 @@ const Opt = ({ list }) => list.map((v) => <option key={v}>{v}</option>);
 
 export default function Onboard() {
   return (
-    <main style={{ fontFamily: "system-ui", maxWidth: 560, margin: "2rem auto", padding: "0 1rem" }}>
+    <main style={{ fontFamily: "system-ui", maxWidth: 560, margin: "1rem auto", padding: "0 1rem", boxSizing: "border-box" }}>
       <h1>Onboard a supplier</h1>
       <Form action={onboard} label="Onboard">
         <label>GSTIN <input name="gstin" required maxLength={15} /></label>
