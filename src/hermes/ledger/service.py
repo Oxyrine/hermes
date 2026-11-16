@@ -31,6 +31,10 @@ class NotFound(Exception):
     pass
 
 
+class NotReady(ValueError):
+    """The invoice has no contract or delivery date yet, so it cannot be read in full (the API says 422)."""
+
+
 def fy_of(d: date) -> str:
     y = d.year if d.month >= 4 else d.year - 1
     return f"{y}-{(y + 1) % 100:02d}"
@@ -151,6 +155,8 @@ def invoice_view(conn, tenant_id, invoice_id, as_of: date, env: dict | None = No
     grn = cur.execute("SELECT id::text, doc_type, extracted FROM document WHERE invoice_id=%s AND tenant_id=%s "
                       "AND extracted->>'delivery_date' IS NOT NULL ORDER BY doc_type, id LIMIT 1",
                       (invoice_id, tenant_id)).fetchone()  # a challan's date first, then the GRN's
+    if con is None or grn is None:
+        raise NotReady("the invoice has no contract or delivery date yet")
     idoc = cur.execute("SELECT id::text, doc_type, extracted FROM document WHERE invoice_id=%s AND "
                        "tenant_id=%s AND doc_type='invoice' AND extracted IS NOT NULL ORDER BY id "
                        "LIMIT 1", (invoice_id, tenant_id)).fetchone()

@@ -3,6 +3,7 @@ releases. The lock is a Postgres advisory lock on the invoice id (session-level,
 own API calls, on other connections, are not blocked). `python -m hermes.dispatcher` drains the
 queue against a running API (HERMES_API_URL)."""
 
+import logging
 import os
 import time
 
@@ -18,13 +19,14 @@ CLAIM = (
     "done_at IS NULL AND dead_at IS NULL AND claimed_at IS NULL AND available_at<=now() AND id <> ALL(%s) "
     "ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1) "
     "RETURNING id, tenant_id::text, invoice_id::text, kind, payload")
+log = logging.getLogger("hermes.dispatcher")
 MAX_ATTEMPTS = 5
 RETRY_AFTER = "1 minute"
 LOCK = "SELECT pg_try_advisory_lock(hashtext(%s))"
 UNLOCK = "SELECT pg_advisory_unlock(hashtext(%s))"
 
 
-def drain(dsn: str, secret: str, http, reader=None) -> int:
+def drain(dsn: str, secret: str, http, reader=None, model=None) -> int:
     """Process every claimable event; returns how many ran. Events whose invoice is locked by
     another run stay in the queue."""
     done, skipped = 0, [0]
@@ -36,13 +38,14 @@ def drain(dsn: str, secret: str, http, reader=None) -> int:
                 continue
             token = jwt.encode({"sub": "scripted-agent", "tenant": ev["tenant_id"], "role": "agent",
                                 "exp": int(time.time()) + 300}, secret, algorithm="HS256")
-            agent, started, status = make_agent(http, token, reader), time.monotonic(), "ok"
+            agent, started, status = make_agent(http, token, reader, model), time.monotonic(), "ok"
             try:
                 agent.handle(ev)
                 c.execute("UPDATE event_queue SET done_at=now() WHERE id=%s", (ev["id"],))
                 done += 1
-            except Exception:  # noqa: BLE001  retry later; after MAX_ATTEMPTS set the event aside, never block the others
+            except Exception as e:  # noqa: BLE001  retry later; after MAX_ATTEMPTS set the event aside, never block the others
                 status = "failed"
+                log.warning("event %s failed (attempt %s): %s: %s", ev["kind"], ev["id"], type(e).__name__, str(e)[:200])
                 c.execute("UPDATE event_queue SET attempts=attempts+1, claimed_at=NULL, "
                           "available_at=now()+%s::interval, dead_at=CASE WHEN attempts+1>=%s THEN now() END "
                           "WHERE id=%s", (RETRY_AFTER, MAX_ATTEMPTS, ev["id"]))

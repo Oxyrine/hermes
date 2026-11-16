@@ -19,7 +19,7 @@ from hermes.checks import (
 from hermes.llm import DataModeRefused, Document, ModelClient
 
 log = logging.getLogger("hermes.extraction")
-PROMPT_VERSION = "t18-v1"
+PROMPT_VERSION = "t28-v1"  # t28: the schema now names the sources and line-item properties
 CONFIDENCE_ESCALATE = 0.85  # below this on classification or extraction, ask the next model up
 LADDER = ("flash_lite", "flash")  # then a person
 DB_TYPE = {"invoice": "invoice", "purchase_order": "po", "goods_receipt_note": "grn",
@@ -46,9 +46,12 @@ def extraction_schema(doc_type: str) -> dict:
     fields = {f: {"type": "number" if f in NUMBERS else "string"} for f in FIELDS[doc_type]}
     return {"type": "object", "required": [*FIELDS[doc_type], "sources", "confidence"], "properties": {
         **fields,
-        "line_items": {"type": "array", "items": {"type": "object"}},
+        "line_items": {"type": "array", "items": {"type": "object", "properties": {
+            "description": {"type": "string"}, "hsn": {"type": "string"}, "qty": {"type": "number"},
+            "rate": {"type": "number"}, "amount": {"type": "number"}}}},  # named, or Gemini returns {}
         "sources": {"type": "object", "additionalProperties": {
-            "type": "object", "required": ["page", "quote"]}},
+            "type": "object", "required": ["page", "quote"],  # the Gemini API needs the properties named
+            "properties": {"page": {"type": "integer"}, "quote": {"type": "string"}}}},
         "confidence": {"type": "number"},
         "confidences": {"type": "object", "additionalProperties": {"type": "number"}}}}
 
@@ -100,6 +103,17 @@ class Reader:
     def __init__(self, client: ModelClient):
         self.client = client
 
+    def classify(self, doc: Document) -> dict:
+        """Classification alone (nothing stored): {"doc_type", "confidence", "model"} or {"error"}."""
+        try:
+            cls, _ = _escalate(self.client, "classify", "Classify this document.", doc, CLASS_SCHEMA,
+                               lambda d: d["confidence"] >= CONFIDENCE_ESCALATE and d["doc_type"] != "other")
+        except DataModeRefused as e:
+            return {"error": str(e)}
+        if cls.status != "ok":
+            return {"error": cls.reason}
+        return {"doc_type": cls.data["doc_type"], "confidence": cls.data["confidence"], "model": cls.model}
+
     def read(self, doc: Document) -> dict:
         """-> {"classification": {...}, "extraction": {"data", "model", "confidence"}, "reason"}.
         A refusal, exhausted quota or two bad answers leaves data empty and a reason; the ledger
@@ -137,16 +151,19 @@ class Reader:
         notes = []
         for m in mismatches:
             plain = f"{m['field']}: " + ", ".join(f"{k} {v}" for k, v in m["values"].items())
-            try:
-                res = self.client.call(
-                    "mismatch_note", "flash", f"{PROMPT_VERSION}-{hash_prefix(m)}", SYSTEM,
-                    f"In one sentence, explain this mismatch to a finance reviewer: {m}", doc,
-                    NOTE_SCHEMA)
-                ok = res.status == "ok" and not check_drafting(res.data["note"], m)
-            except DataModeRefused:
-                ok = False
-            notes.append(res.data["note"] if ok else plain)
+            note = self.note(doc, m)
+            notes.append(note if note is not None and not check_drafting(note, m) else plain)
         return notes
+
+    def note(self, doc: Document, m: dict) -> str | None:
+        """The model's raw note for one mismatch, unchecked; None when there is none."""
+        try:
+            res = self.client.call(
+                "mismatch_note", "flash", f"{PROMPT_VERSION}-{hash_prefix(m)}", SYSTEM,
+                f"In one sentence, explain this mismatch to a finance reviewer: {m}", doc, NOTE_SCHEMA)
+        except DataModeRefused:
+            return None
+        return res.data["note"] if res.status == "ok" else None
 
 
 def hash_prefix(obj) -> str:
