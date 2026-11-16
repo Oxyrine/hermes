@@ -178,7 +178,7 @@ def test_no_code_path_contacts_the_dispute_portal():
     src = "\n".join(p.read_text(encoding="utf-8").lower()
                     .replace('httpx.post(f"https://generativelanguage', "")  # agent.py's Gemini call, ticket 22
                     for p in pathlib.Path(hermes.__file__).parent.rglob("*.py")
-                    # outbound callers: lender endpoints (ticket 33), Gemini API (ticket 17)
-                    if p.name not in ("webhooks.py", "llm.py"))
+                    # outbound callers: lender endpoints (ticket 33), Gemini API (ticket 17), Groq fallback
+                    if p.name not in ("webhooks.py", "llm.py", "groq.py"))
     for needle in ("httpx.post", "requests.", "urllib", "odr.msme", "samadhaan", "socket"):
         assert needle not in src.replace("self.http.request", ""), needle
