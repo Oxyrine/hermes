@@ -91,3 +91,5 @@ export default function Onboard() {
     </main>
   );
 }
+
+export const metadata = { title: "Onboarding" };

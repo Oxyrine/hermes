@@ -31,6 +31,9 @@ from hermes.ledger import (
 from hermes.ledger.service import NotFound
 
 TOKEN_TTL_SECONDS = 8 * 3600
+# HSTS is a deploy-time header (ticket 35): the prototype serves plain http on localhost.
+SECURITY_HEADERS = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
+                    "Referrer-Policy": "no-referrer", "Cache-Control": "no-store"}
 NOINDEX = {"X-Robots-Tag": "noindex, nofollow"}
 OBJECT = re.compile(r"^/v1/(invoices|actions)/([0-9a-fA-F-]{36})(/|$)")
 TABLES = {"invoices": ("invoice", "invoice"), "actions": ("action_request", "action")}
@@ -38,6 +41,13 @@ TABLES = {"invoices": ("invoice", "invoice"), "actions": ("action_request", "act
 
 def create_app(dsn: str, secret: str, env: str = "production", model=None) -> FastAPI:
     app = FastAPI(title="Hermes", version="0.0.0")
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        for k, v in SECURITY_HEADERS.items():
+            response.headers.setdefault(k, v)
+        return response
 
     def conn():
         with psycopg.connect(dsn, autocommit=True) as c:

@@ -9,6 +9,7 @@ dependencies = [
     "psycopg[binary]>=3.3.9",
     "pyjwt>=2.15.1",
     "reportlab>=5.1.0",
+    "uvicorn>=0.54.0",
 ]
 
 [dependency-groups]

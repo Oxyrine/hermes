@@ -96,3 +96,5 @@ export default async function Portfolio({ searchParams }) {
     </main>
   );
 }
+
+export const metadata = { title: "Portfolio" };

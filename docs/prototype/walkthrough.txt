@@ -1,8 +1,8 @@
-1. Reset and seeded: one verified invoice, Rs 1000000.00, due 2026-09-15.
-2. Lender advances Rs 700000.00 on 2026-09-01: invoice advanced.
-3. Clock set to 2026-11-14 and ticked; the agent ran: 1 event.
-   Invoice overdue; claim Rs 1027643.93 (interest Rs 27643.93); exposure Rs 725780.81.
-4. Approval list: settlement offer of Rs 1027643.93 proposed.
+1. Reset and loaded the synthetic set: 3 suppliers, 4 buyers, 30 invoices. The story is invoice S1/26-27/0010, Rs 314890.08, a verified late buyer.
+2. Lender advances Rs 220423.06 on 2026-09-01: invoice advanced.
+3. Clock set to 2026-11-14 and ticked; the agent ran: 25 events (every overdue invoice).
+   Invoice overdue; claim Rs 350571.17 (interest Rs 35681.09); exposure Rs 228541.18.
+4. Approval list: settlement offer of Rs 350571.17 proposed.
 5. Approver approves: invoice settlement_offered.
-6. Buyer pays Rs 1027643.93: invoice paid. Waterfall: lender Rs 727914.65, costs Rs 0.00, supplier Rs 299729.28.
+6. Buyer pays Rs 350571.17: invoice paid. Waterfall: lender Rs 229213.11, costs Rs 0.00, supplier Rs 121358.06.
 7. Lender confirms repayment: invoice closed.

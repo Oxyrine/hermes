@@ -109,3 +109,5 @@ export default async function Supplier() {
     </main>
   );
 }
+
+export const metadata = { title: "Your invoices" };

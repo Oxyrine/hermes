@@ -1,0 +1,9 @@
+.skip { position: absolute; left: -999px; top: 0; background: #fff; padding: .5rem 1rem; z-index: 10; }
+.skip:focus { left: 0; }
+a:hover, button:hover:not(:disabled) { opacity: .8; }
+:focus-visible { outline: 2px solid #1a56db; outline-offset: 2px; }
+#main:focus { outline: none; }
+@media print {
+  .skip, button, form { display: none; }
+  a { color: inherit; text-decoration: none; }
+}

@@ -1,14 +1,16 @@
 # Late-buyer demo script (two minutes)
 
-Setup, once: `uv run python -m hermes.ledger.seed` (resets DATABASE_URL and loads the synthetic set: 3 suppliers, 4 buyers, 30 invoices; the story invoice is the first late-buyer one, S1/26-27/0010, so the figures below differ from the old hand-seeded Rs 1000000.00 invoice; log in as supplier@kaveri.example to approve),
+Say about the agent (ticket 02, ADR 0002): "Hermes runs one managed agent per invoice on the Gemini API; the same agent design also runs as a Gemini function-calling loop, which stays the default until the managed path is reliable." The demo itself runs the scripted agent: zero model calls, no API key needed.
+
+Setup, once: `uv run python -m hermes.ledger.seed` (resets DATABASE_URL and loads the synthetic set: 3 suppliers, 4 buyers, 30 invoices; the story invoice is the first late-buyer one, S1/26-27/0010, figures below are the recorded run in `walkthrough.txt`; log in as supplier@kaveri.example to approve),
 `HERMES_ENV=development uv run uvicorn hermes.api:app`, `cd web && npm run dev`, open :3000.
 Replay any time by running the seed command again. `uv run python -m hermes.demo` plays the whole
 story from a fresh reset without the browser; its output is stored in `walkthrough.txt`.
 
-1. (0:00) The page shows one verified invoice, Rs 1000000.00, due 2026-09-15, with the evidence
+1. (0:00) The page shows the story invoice, Rs 314890.08, with the evidence
    score and deadline working. Say: every figure is the API's; the browser does no arithmetic.
 2. (0:20) Record the lender advance: `POST /v1/invoices/{id}/advances` as ops with principal
-   700000.00. State becomes advanced.
+   220423.06. State becomes advanced.
 3. (0:40) Move time: `PUT /dev/clock {"date":"2026-11-14"}`, `POST /dev/tick {}`, then run
    `uv run python -m hermes.dispatcher`. The agent re-runs interest and collateral, marks the
    invoice overdue and proposes a settlement offer. Reload: the chart shows claim value above exposure.

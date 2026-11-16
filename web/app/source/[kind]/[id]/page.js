@@ -65,3 +65,5 @@ export default async function Source({ params, searchParams }) {
     </main>
   );
 }
+
+export const metadata = { title: "Source" };

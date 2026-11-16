@@ -189,3 +189,5 @@ export default async function Page() {
     </main>
   );
 }
+
+export const metadata = { title: "Invoice" };

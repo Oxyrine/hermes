@@ -72,3 +72,5 @@ export default async function Rates() {
     </main>
   );
 }
+
+export const metadata = { title: "Bank rates" };
