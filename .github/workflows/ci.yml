@@ -5,7 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     # No model calls and no API key: tests use fixtures and a fake model.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
       - run: uv run ruff check .
