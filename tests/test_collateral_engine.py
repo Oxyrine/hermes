@@ -61,7 +61,7 @@ def test_series_and_envelope():
     inp = {k: v for k, v in BASE.items() if k not in ("as_of", "statutory_claim")}
     out = run({**inp, "range": {"from": "2026-03-01", "to": "2026-03-03"}, "statutory_claims": claims})
     assert [d["date"] for d in out["result"]["series"]] == ["2026-03-01", "2026-03-02", "2026-03-03"]
-    assert out["rule_version"] == "1.0.0" and len(out["input_hash"]) == 64 and out["reasons"]
+    assert out["rule_version"] == "1.1.0" and len(out["input_hash"]) == 64 and out["reasons"]
 
 
 def test_ltv_falls_when_lender_rate_below_3x_bank_rate():

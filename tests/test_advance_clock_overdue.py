@@ -135,7 +135,7 @@ def test_a_locked_invoice_is_not_touched_by_a_second_run(client, db, dsn):
     inv = seeded_invoice_id(client, h)
     late_buyer(client, h, inv)
     with psycopg.connect(dsn, autocommit=True) as other:
-        other.execute("SELECT pg_advisory_lock(hashtext(%s))", (inv,))
+        other.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (inv,))
         assert drain(dsn, SECRET, client) == 0
         assert state(db, inv) == "advanced"
     assert drain(dsn, SECRET, client) == 1

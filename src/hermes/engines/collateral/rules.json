@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "policy": {
     "name": "lender-policy-v0",
     "advance_rate": {"A": "0.80", "B": "0.70", "C": "0.50", "D": "0"},

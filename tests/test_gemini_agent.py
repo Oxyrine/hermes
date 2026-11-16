@@ -41,10 +41,10 @@ def actions(dsn, kind="review"):
 def test_cap_reached_stops_and_proposes_a_review(client, dsn):
     agent, _, ev = setup(client, dsn, [[("read_invoice", {})]] * 20, max_calls=3)
     agent.handle(ev)
-    assert agent.tool_calls == 4  # 3 reads, then the review proposal
+    assert agent.tool_calls == 3  # 2 reads, then the review proposal: never past the cap
     (draft,) = actions(dsn)
     assert "cap of 3" in draft["reason"] and draft["cites"] == {"engine_runs": [], "document_ids": []}
-    assert (agent.tokens_in, agent.tokens_out) == (40, 20)
+    assert (agent.tokens_in, agent.tokens_out) == (30, 15)
 
 
 def test_a_tool_off_the_allowlist_is_refused_and_recorded(client, dsn):

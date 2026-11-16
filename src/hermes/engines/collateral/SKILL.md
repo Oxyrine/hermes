@@ -5,7 +5,7 @@ description: Values an invoice claim, the lender's exposure and loan-to-value on
 
 # Collateral (engine `collateral`)
 
-Claim value is the statutory claim (computed by the `interest` skill, passed in as `statutory_claim`) when eligibility is `eligible` and the due date has passed; otherwise the unpaid principal. Exposure is the advance compounded monthly at the lender's nominal rate from `funded_on`, plus simple interest (365-day) for the part month. LTV = exposure / claim. Lender policy (advance rate by band, alert margin) is in `rules.json`.
+Claim value is the statutory claim (computed by the `interest` skill, passed in as `statutory_claim`) when eligibility is not `ineligible` and the due date has passed; otherwise the unpaid principal. Exposure is the advance compounded monthly at the lender's nominal rate from `funded_on`, plus simple interest (365-day) for the part month. LTV = exposure / claim. Lender policy (advance rate by band, alert margin) is in `rules.json`.
 
 **Never estimate a value this skill returns; call it.**
 

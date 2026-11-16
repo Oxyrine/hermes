@@ -33,7 +33,7 @@ def _day(inputs: dict, as_of: date, statutory: Decimal) -> dict:
     )
     unpaid = dec(inputs["principal"]) - paid
     overdue = as_of > date.fromisoformat(inputs["due_date"])
-    claim = statutory if inputs["eligibility"] == "eligible" and overdue else unpaid
+    claim = statutory if inputs["eligibility"] != "ineligible" and overdue else unpaid
 
     advance = dec(inputs.get("advance", "0"))
     funded = date.fromisoformat(inputs["funded_on"]) if inputs.get("funded_on") else None

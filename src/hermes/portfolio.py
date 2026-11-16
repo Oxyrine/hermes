@@ -14,7 +14,8 @@ from hermes.ledger import service
 COLUMNS = ["supplier", "buyer", "total", "state", "band", "days_late", "claim_value", "exposure",
            "ltv", "alerts"]
 RATE_WINDOW_DAYS = 30  # a bank-rate change stays an alert this long after it takes effect
-MESSAGES = {"hard_flag": "Hard flag on the evidence", "ltv_breach": "Loan-to-value above the band limit"}
+MESSAGES = {"hard_flag": "Hard flag on the evidence", "ltv_breach": "Loan-to-value above the band limit",
+            "cushion": "Lender rate is above three times the bank rate: the cushion shrinks with time"}
 
 
 def _scan(conn, tenant, as_of: date):
@@ -35,6 +36,8 @@ def _scan(conn, tenant, as_of: date):
                 kinds.append("hard_flag")
             if col and "ltv_above_band_limit" in col["alerts"]:
                 kinds.append("ltv_breach")
+            if col and "cushion erodes with time" in col["alerts"]:
+                kinds.append("cushion")
         rows.append({
             "id": i["id"], "invoice_no": i["invoice_no"], "buyer_id": i["buyer_id"],
             "supplier": i["supplier"], "buyer": i["buyer"], "total": v["total"], "state": v["state"],

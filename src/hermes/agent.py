@@ -330,7 +330,7 @@ class GeminiAgent(ScriptedAgent):
             msgs.append({"role": "model", "text": reply.get("text", ""), "calls": reply["calls"]})
             for c in reply["calls"]:
                 name, args = c["name"], c.get("args") or {}
-                if self.tool_calls >= self.max_calls:  # ponytail: the stop-proposal is one call past the cap
+                if self.tool_calls >= self.max_calls - 1 and name != "propose_action":  # the stop-proposal is the last allowed call
                     return self.review(inv, f"tool-call cap of {self.max_calls} reached")
                 if name not in ALLOWED:
                     self.tool_calls += 1

@@ -22,8 +22,8 @@ CLAIM = (
 log = logging.getLogger("hermes.dispatcher")
 MAX_ATTEMPTS = 5
 RETRY_AFTER = "1 minute"
-LOCK = "SELECT pg_try_advisory_lock(hashtext(%s))"
-UNLOCK = "SELECT pg_advisory_unlock(hashtext(%s))"
+LOCK = "SELECT pg_try_advisory_lock(hashtextextended(%s, 0))"
+UNLOCK = "SELECT pg_advisory_unlock(hashtextextended(%s, 0))"
 
 
 def drain(dsn: str, secret: str, http, reader=None, model=None) -> int:
