@@ -17,7 +17,8 @@ TABLE = {
     ("verified", "gst_blocked"): lambda f: bool(f.get("ims_blocked")),
     ("gst_blocked", "verified"): lambda f: bool(f.get("ims_accepted")),
     ("verified", "financeable"): lambda f: f.get("band") in ("A", "B", "C")
-    and f.get("eligibility") not in (None, "ineligible"),
+    and f.get("eligibility") in ("eligible", "eligible_at_risk")  # trader / ineligible: review
+    and not f.get("hard_flags"),  # any hard flag forces review whatever the score
     ("financeable", "advanced"): lambda f: bool(f.get("has_advance")),
     ("advanced", "overdue"): lambda f: bool(f.get("unpaid") and f.get("past_due")),
     ("verified", "overdue"): lambda f: bool(f.get("unpaid") and f.get("past_due")),

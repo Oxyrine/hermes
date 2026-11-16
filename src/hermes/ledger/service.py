@@ -327,7 +327,8 @@ def guard_facts(conn, tenant_id, invoice_id, as_of: date) -> dict:
                             "AND paid_on<=%s", (view["id"], as_of)).fetchone()[0]
     covered = received >= owed
     return {"ims_blocked": gst["blocked"], "ims_accepted": gst["accepted"],
-            "band": view["evidence"]["band"], "eligibility": view["eligibility"]["status"],
+            "band": view["evidence"]["band"], "hard_flags": view["evidence"]["hard_flags"],
+            "eligibility": view["eligibility"]["status"],
             "matched": bool(conn.execute(
                 "SELECT 1 FROM evidence_item WHERE invoice_id=%s AND signal='irn_valid_matching'",
                 (view["id"],)).fetchone()),

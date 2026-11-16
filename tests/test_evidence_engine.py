@@ -47,7 +47,7 @@ def test_band_edges(pts, band):
 
 def test_envelope_and_unknown():
     out = score([sig("debit_note")])
-    assert out["rule_version"] == "1.1.0" and len(out["input_hash"]) == 64
+    assert out["rule_version"] == "1.2.0" and len(out["input_hash"]) == 64
     assert out["result"]["contributions"][0]["source"] == "src:debit_note"
     with pytest.raises(ValueError):
         score([sig("nope")])

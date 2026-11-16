@@ -52,7 +52,7 @@ def test_loop_reads_documents_through_tools_and_moves_the_invoice(client, conn, 
 
     model.name = "stub"
     drain(conn.info.dsn, SECRET, client, reader, model)
-    assert state(client, iid) == "financeable"
+    assert state(client, iid) == "verified"  # trader supplier: manual_review keeps it from financeable
     assert {m["result"]["doc_type"] for m in seen if "doc_type" in m["result"]} == {"invoice", "purchase_order", "goods_receipt_note"}
     runs = conn.execute("SELECT runner FROM agent_run").fetchall()
     assert runs and all(r[0] == "gemini" for r in runs)
