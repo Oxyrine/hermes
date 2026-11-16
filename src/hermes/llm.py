@@ -217,6 +217,9 @@ class ModelClient:
                 self.sleep(delay)
 
 
+SKIP_SIGNATURE = "skip_thought_signature_validator"
+
+
 def gemini_tool_model(api_key: str, name: str | None, limit_exc: type[Exception], timeout: float = 60):
     """The real model: Gemini generateContent over REST on the pinned Flash model, one call per turn.
     ponytail: no cache or backoff here; the loop retries failed events itself."""
@@ -236,8 +239,11 @@ def gemini_tool_model(api_key: str, name: str | None, limit_exc: type[Exception]
             else:
                 parts = [{"text": m["text"]}] if m.get("text") else []
                 # Gemini 3 refuses a replayed call without its thought signature (found on the first live run)
+                # a reply cached before signatures were kept has none: Google's documented dummy value stands in
                 parts += [{"functionCall": {"name": c["name"], "args": c.get("args") or {}},
-                           **({"thoughtSignature": c["sig"]} if c.get("sig") else {})} for c in m.get("calls", [])]
+                           **({"thoughtSignature": c.get("sig") or SKIP_SIGNATURE} if n == 0 else
+                              ({"thoughtSignature": c["sig"]} if c.get("sig") else {}))}
+                          for n, c in enumerate(m.get("calls", []))]
                 contents.append({"role": m["role"], "parts": parts})
         r = httpx.post(f"https://generativelanguage.googleapis.com/v1beta/models/{name}:generateContent",
                        headers={"x-goog-api-key": api_key}, timeout=timeout,
@@ -245,6 +251,8 @@ def gemini_tool_model(api_key: str, name: str | None, limit_exc: type[Exception]
                              "tools": [{"functionDeclarations": decls}]})
         if r.status_code == 429:
             raise limit_exc(r.text)
+        if r.is_error:
+            logging.getLogger("hermes.llm").warning("gemini %s: %s", r.status_code, r.text[:500])
         r.raise_for_status()
         body = r.json()
         parts = body["candidates"][0]["content"].get("parts", [])

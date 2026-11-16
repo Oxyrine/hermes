@@ -35,6 +35,8 @@ GAP = {PINS["flash"]: 8.0, PINS["flash_lite"]: 6.5}
 TIMEOUT = 180  # seconds: the pinned Flash took 50 s to say one word on 2026-11-15 (ADR 0002 warned of it)
 BACKOFF = (5, 20, 60, 120)  # after a 429 or a capacity error; the daily limit is never retried
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+EVENT_ID = re.compile(r'(\\?"id\\?": )\d+')
+HASH = re.compile(r"[0-9a-f]{64}")  # an engine run's input hash covers values that differ between runs
 STAMP = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)?")
 
 
@@ -112,6 +114,8 @@ def _canon(obj) -> tuple[str, list[str]]:
         return f"<id:{ids.index(m[0])}>"
 
     text = STAMP.sub("<ts>", json.dumps(obj, sort_keys=True, default=str))
+    text = EVENT_ID.sub(lambda m: m[1] + "<n>", text)  # the queue's serial number differs between runs
+    text = HASH.sub("<hash>", text)
     return UUID.sub(rep, text), ids
 
 
