@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from hermes.agent import LOOP_PROMPT_VERSION, ModelLimit, gemini_model
+from hermes.groq import GroqBackend, groq_tool_model
 from hermes.llm import (
     PINS,
     Backend,
@@ -31,7 +32,7 @@ log = logging.getLogger("hermes.live")
 CACHE_FILE = Path("storage/live-cache/model_cache.jsonl")
 # Seconds between calls to one model. Google does not publish the free-tier limits (ADR 0002); a 429 on
 # 2026-11-15 named 15 requests a minute for Flash-Lite and 20 a day for Flash, so stay under those.
-GAP = {PINS["flash"]: 8.0, PINS["flash_lite"]: 6.5}
+GAP = {PINS["flash"]: 8.0, PINS["flash_lite"]: 6.5, PINS["groq"]: 3.0}  # Groq free tier: about 30 a minute
 TIMEOUT = 180  # seconds: the pinned Flash took 50 s to say one word on 2026-11-15 (ADR 0002 warned of it)
 BACKOFF = (5, 20, 60, 120)  # after a 429 or a capacity error; the daily limit is never retried
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -40,7 +41,7 @@ HASH = re.compile(r"[0-9a-f]{64}")  # an engine run's input hash covers values t
 STAMP = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)?")
 
 
-def load_env(path: str = ".env", keys=("GEMINI_API_KEY",)) -> None:
+def load_env(path: str = ".env", keys=("GEMINI_API_KEY", "GROQ_API_KEY")) -> None:
     """Put the named keys of a git-ignored .env into the environment (never overriding, never printing).
     Only the key: a DATABASE_URL in there must never point this run's database resets at a real database."""
     p = Path(path)
@@ -223,12 +224,13 @@ class Recorder:
 class Live:
     """The live pieces for one run: cache, pacer, the Gemini-backed client and the loop model."""
 
-    def __init__(self, root: Path, manifest: dict, cache=None, pacer=None):
+    def __init__(self, root: Path, manifest: dict, cache=None, pacer=None, groq: bool = False):
         self.cache, self.pacer = cache or FileCache(), pacer or Pacer()
         self.hashes = set(synthetic_set(root, manifest))
-        self.client = ModelClient(PacedBackend(GeminiBackend(timeout=TIMEOUT), self.pacer), cache=self.cache,
+        backend, loop = (GroqBackend(timeout=TIMEOUT), groq_tool_model(os.environ["GROQ_API_KEY"], None, ModelLimit, TIMEOUT))             if groq else (GeminiBackend(timeout=TIMEOUT), gemini_model(os.environ["GEMINI_API_KEY"], timeout=TIMEOUT))
+        self.client = ModelClient(PacedBackend(backend, self.pacer), cache=self.cache,
                                   manifest_hashes=self.hashes)  # data_mode stays "synthetic"
-        self.loop = LoopModel(gemini_model(os.environ["GEMINI_API_KEY"], timeout=TIMEOUT), self.cache, self.pacer)
+        self.loop = LoopModel(loop, self.cache, self.pacer)
 
     def stats(self) -> dict:
         return {"api_calls": self.pacer.api_calls, "cache_hits": self.client.hits + self.loop.hits,
@@ -252,17 +254,21 @@ def main(argv=None) -> int:
     ap.add_argument("--expect-no-calls", action="store_true")
     ap.add_argument("--flash-as-lite", action="store_true",
                     help="serve the Flash role with Flash-Lite (when Flash's free daily quota is spent); labelled in the report")
+    ap.add_argument("--groq", action="store_true",
+                    help="fallback: serve every role with Groq (needs GROQ_API_KEY); labelled in the report")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(message)s")
     load_env()
     assert os.environ.get("HERMES_DATA_MODE", "synthetic") == "synthetic", "the live run is synthetic-only"
     flash = PINS["flash"]
-    if args.flash_as_lite:
+    if args.groq:
+        PINS["flash"] = PINS["flash_lite"] = PINS["groq"]  # cache keys carry the model name
+    elif args.flash_as_lite:
         PINS["flash"] = PINS["flash_lite"]  # still one of the two pinned models; cache keys carry the name
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "syn"
         manifest = generate(root)
-        live, out = Live(root, manifest), {}
+        live, out = Live(root, manifest, groq=args.groq), {}
         import pixeltable_pgserver as pgserver  # always a throwaway database: the stages reset it
         server = pgserver.get_server(Path(tmp) / "pg")
         dsn = server.get_uri()
@@ -289,7 +295,10 @@ def main(argv=None) -> int:
         models = {"Flash (pinned)": flash, "Flash-Lite (pinned)": PINS["flash_lite"],
                   "Model that served the Flash role in this run": PINS["flash"]}
         text = evaluation.render(date.today().isoformat(), models, versions, out["scenarios"], out["eval"],
-                                 out["injection"], stats, substituted=args.flash_as_lite)
+                                 out["injection"], stats, substituted=(
+                                     f"**Fallback run.** Gemini's free tier was unavailable, so every role ran on Groq "
+                                     f"(`{PINS['groq']}`), which is not a pinned model. These results describe that model, "
+                                     "not the shipped configuration." if args.groq else args.flash_as_lite))
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
         Path(args.report).write_text(text, encoding="utf-8")
         print("report written", args.report)

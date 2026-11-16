@@ -170,7 +170,8 @@ def render(date: str, models: dict, versions: dict, scen: dict, ev: dict, inj: d
     L = [f"# Live run and evaluation, {date}", "",
          ("Manual run of ticket 28: the Gemini loop and real extraction on the synthetic set, read through "
          "the response cache. The synthetic-only guard stayed on throughout."), "",
-         *([("**Substitution.** The pinned Flash model's free daily quota (20 requests per day per project) was "
+         *([(substituted if isinstance(substituted, str) else
+            "**Substitution.** The pinned Flash model's free daily quota (20 requests per day per project) was "
             "spent, so every task meant for Flash (the agent loop's reasoning, objection and contract-term "
             "reading, notes, letters) ran on the pinned Flash-Lite instead. Those results describe Flash-Lite, "
             "not the shipped configuration, and must be re-run on Flash once its quota returns."), ""]

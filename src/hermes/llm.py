@@ -21,7 +21,8 @@ from typing import Protocol
 from hermes.checks import check_schema
 
 log = logging.getLogger("hermes.llm")
-PINS = tomllib.loads(Path(__file__).with_name("models.toml").read_text(encoding="utf-8"))["models"]
+_CFG = tomllib.loads(Path(__file__).with_name("models.toml").read_text(encoding="utf-8"))
+PINS = _CFG["models"] | _CFG["fallback"]  # "groq" is the manual-run fallback, never a product default
 ALLOWED_MODELS = frozenset(PINS.values())
 ZERO_TEMPERATURE_TASKS = ("classify", "extract", "detect")  # task-name prefixes
 RETRY_AFTER = (2, 8, 30)  # seconds between rate-limit retries

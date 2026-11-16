@@ -12,6 +12,11 @@
 flash = "gemini-3.8-flash"            # contract terms, objections, mismatch notes, drafting, agent reasoning
 flash_lite = "gemini-3.5-flash-lite"  # classification / extraction; escalate to flash on low confidence
 
+# Fallback for manual live runs when Gemini's free tier is out (hermes.groq). Not a pin: nothing in
+# the product uses it, and a run on it is labelled as a fallback run.
+[fallback]
+groq = "llama-3.3-70b-versatile"
+
 [limits.flash]
 note = "AI Studio per-project; shared free pool. Capacity-limited: gemini-3.8-flash read-timed-out at 100s and gemini-3.7-flash returned 503 'high demand' on 2026-11-15."
 rpm = "see AI Studio"
