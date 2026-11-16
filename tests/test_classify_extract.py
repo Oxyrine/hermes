@@ -245,3 +245,11 @@ def test_without_a_reader_the_runner_ignores_uploads(client, conn, root):  # noq
     iid = upload(client, root, INV, ("invoice",))
     drain(conn.info.dsn, SECRET, client)
     assert state(client, iid) == "ingested" and docs(conn, iid)["invoice"][0] is None
+
+
+def test_full_read_of_an_invoice_without_contract_or_delivery_is_422_not_a_crash(client, conn, root):  # noqa: F811
+    prepare(client, conn, root, INV, None)
+    iid = upload(client, root, INV, ("invoice",))
+    run(client, conn, reader_for(root, fake_for(root, INV, kinds=("invoice",))))
+    r = client.get(f"/v1/invoices/{iid}", headers=login(client))
+    assert r.status_code == 422 and "contract or delivery" in r.json()["detail"]

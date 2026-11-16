@@ -139,7 +139,11 @@ class ScriptedAgent:
 
     def bank_rate_changed(self, event: dict) -> None:
         """Re-run interest and collateral as of the event date (the read does both); no state moves."""
-        self.call("GET", f"/v1/invoices/{event['invoice_id']}", params={"as_of": event["payload"]["as_of"]})
+        try:
+            self.call("GET", f"/v1/invoices/{event['invoice_id']}", params={"as_of": event["payload"]["as_of"]})
+        except RuntimeError as e:
+            if " 422 " not in str(e):  # no contract or delivery date yet: nothing to re-run
+                raise
 
     def hard_flag(self, event: dict) -> None:
         """A hard flag on a funded invoice: re-read it (re-runs evidence and the collateral alert)

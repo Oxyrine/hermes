@@ -549,6 +549,8 @@ def create_app(dsn: str, secret: str, env: str = "production", model=None) -> Fa
             return service.invoice_view(c, who["tenant"], invoice_id, as_of or service.today(c))
         except service.NotFound:
             raise HTTPException(404, "invoice not found") from None
+        except service.NotReady as e:
+            raise HTTPException(422, str(e)) from None
 
     @app.get("/v1/admin/bank-rates")
     def rates(who=Depends(caller), c=Depends(conn)):
