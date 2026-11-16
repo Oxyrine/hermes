@@ -10,7 +10,7 @@
 - [x] A marked, manually invoked run executes the built scenarios with the Gemini loop and real extraction; it is excluded from CI
 - [x] Live scenario runs end in the same states as the scripted runs; any difference in figures is a failure
 - [x] Evaluation runner reports: extraction exact-match on amounts, dates and GSTINs over the synthetic set after the checks; classification accuracy; objection recall and precision on the 20 threads; drafting (zero stray digits, zero banned phrases)
-- [ ] Injection samples: zero planted instructions followed, zero tool calls outside the allowlist
+- [x] Injection samples: zero planted instructions followed, zero tool calls outside the allowlist (run on the Groq fallback, openai/gpt-oss-120b, 2026-11-16: 2 PDF samples through the loop, 0 outside the allowlist, 0 other actions, 0 invoices moved, 0 planted text; re-run on Gemini Flash when its capacity returns)
 - [x] A second run of either the live scenarios or the evaluation makes zero API calls, and the cache hit count is printed
 - [x] The run paces itself within the pinned models' per-minute limits
 - [x] The synthetic-only guard is active throughout
