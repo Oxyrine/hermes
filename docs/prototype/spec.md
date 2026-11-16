@@ -83,7 +83,7 @@ The first thing built after the engines is a thin end-to-end demo of the "late b
 
 ### Buyer
 
-47. As a buyer, I want a read-only statement page on a signed link that expires, showing the invoice, delivery evidence, acceptance and due dates and interest to date, so that I can verify the supplier's position. (Cut-list item 2.)
+47. As a buyer, I want a read-only statement page on a signed link that expires, showing the invoice, delivery evidence, acceptance and due dates and interest to date, with a pay-or-respond choice that records the buyer's reply (Hermes takes no payment), so that I can verify the supplier's position. (Cut-list item 2; ticket 32.)
 48. As a buyer, I want the statement worded neutrally with no threats or legal conclusions, so that I am informed rather than pressured.
 
 ### Evidence and computation
@@ -171,7 +171,7 @@ The first thing built after the engines is a thin end-to-end demo of the "late b
 
 ### API contract
 
-The fourteen endpoints of the product spec (§8) are the contract, with the invoice read returning state, eligibility, deadline, claim, evidence and collateral in the shape shown there, plus the collateral series for the chart. Development-only additions: login, clock, and a payment entry used by the slice.
+The fourteen endpoints of the product spec (§8) are the contract, with the invoice read returning state, eligibility, deadline, claim, evidence and collateral in the shape shown there, plus the collateral series for the chart. Development-only additions: login, clock, and a payment entry used by the slice. Further endpoints are added by tickets and are part of the prototype: onboarding and upload (15), model-read confirmation (20), dispute pack, award and offer expiry (23), letter consent (24), portfolio, buyer view and alert acknowledge/assign (25), approval queue (26), source lookup (27), supplier app (31), buyer statement respond (32) and webhooks (33). The ticket in brackets is the authority for each.
 
 ### Build order
 
