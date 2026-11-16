@@ -217,7 +217,7 @@ class ModelClient:
                 self.sleep(delay)
 
 
-def gemini_tool_model(api_key: str, name: str | None, limit_exc: type[Exception]):
+def gemini_tool_model(api_key: str, name: str | None, limit_exc: type[Exception], timeout: float = 60):
     """The real model: Gemini generateContent over REST on the pinned Flash model, one call per turn.
     ponytail: no cache or backoff here; the loop retries failed events itself."""
     import httpx
@@ -227,15 +227,20 @@ def gemini_tool_model(api_key: str, name: str | None, limit_exc: type[Exception]
     def model(system: str, msgs: list[dict], decls: list[dict]) -> dict:
         contents = []
         for m in msgs:
-            if m["role"] == "tool":
+            if m["role"] == "tool":  # the answers to one turn's calls go back together, in one user turn
                 part = {"functionResponse": {"name": m["name"], "response": m["result"]}}
-                contents.append({"role": "user", "parts": [part]})
+                if contents and contents[-1]["role"] == "user" and "functionResponse" in contents[-1]["parts"][0]:
+                    contents[-1]["parts"].append(part)
+                else:
+                    contents.append({"role": "user", "parts": [part]})
             else:
                 parts = [{"text": m["text"]}] if m.get("text") else []
-                parts += [{"functionCall": {"name": c["name"], "args": c.get("args") or {}}} for c in m.get("calls", [])]
+                # Gemini 3 refuses a replayed call without its thought signature (found on the first live run)
+                parts += [{"functionCall": {"name": c["name"], "args": c.get("args") or {}},
+                           **({"thoughtSignature": c["sig"]} if c.get("sig") else {})} for c in m.get("calls", [])]
                 contents.append({"role": m["role"], "parts": parts})
         r = httpx.post(f"https://generativelanguage.googleapis.com/v1beta/models/{name}:generateContent",
-                       headers={"x-goog-api-key": api_key}, timeout=60,
+                       headers={"x-goog-api-key": api_key}, timeout=timeout,
                        json={"systemInstruction": {"parts": [{"text": system}]}, "contents": contents,
                              "tools": [{"functionDeclarations": decls}]})
         if r.status_code == 429:
@@ -244,8 +249,8 @@ def gemini_tool_model(api_key: str, name: str | None, limit_exc: type[Exception]
         body = r.json()
         parts = body["candidates"][0]["content"].get("parts", [])
         use = body.get("usageMetadata", {})
-        return {"calls": [{"name": p["functionCall"]["name"], "args": p["functionCall"].get("args", {})}
-                          for p in parts if "functionCall" in p],
+        return {"calls": [{"name": p["functionCall"]["name"], "args": p["functionCall"].get("args", {}),
+                           "sig": p.get("thoughtSignature")} for p in parts if "functionCall" in p],
                 "text": "".join(p.get("text", "") for p in parts),
                 "tokens_in": use.get("promptTokenCount"), "tokens_out": use.get("candidatesTokenCount")}
 

@@ -181,15 +181,30 @@ class ScriptedAgent:
 
 MAX_CALLS = 12
 MIN_CONFIDENCE = 0.7  # below this a result stops the loop; the model never decides this
+LOOP_PROMPT_VERSION = "t28-v1"  # bump with SYSTEM_INSTRUCTION or DECLARATIONS; part of the live cache key
+READS = ("classify_document", "extract_fields", "detect_objection", "read_contract_terms")
 ENGINES = ("eligibility", "deadline", "interest", "evidence", "collateral", "settlement")
 SYSTEM_INSTRUCTION = """# Role
 You maintain ONE invoice for Hermes. You keep its evidence, deadline, claim and collateral
 current, and you propose the next action for a human. You do not lend, file, or send anything.
 
 # Tools
-- read_invoice(as_of), propose_action(kind, draft, document_ids, as_of)
+- read_invoice(as_of), propose_action(kind, draft, document_ids, as_of), move_state(to, as_of)
 - engines: run_eligibility, run_deadline, run_interest, run_evidence, run_collateral, run_settlement
   (each takes `inputs`; running an engine stores its result)
+- reading the event's own document (no arguments; the system picks the document): classify_document,
+  extract_fields (reads and stores the fields, returns problems and mismatches), detect_objection,
+  read_contract_terms. They only propose; a person confirms anything that moves a date.
+- move_state asks the server to move the invoice; it refuses when the evidence is not there.
+
+# Events
+- document.ingested for an invoice, PO, GRN or challan: classify_document, extract_fields. With no
+  problems or mismatches, move_state to "verified" then "financeable" (stop if refused). Otherwise
+  propose_action kind "review" with the problems and mismatches.
+- document.ingested for an email or debit note: detect_objection. For a contract: read_contract_terms.
+- deadline.passed: read_invoice with the event's as_of, move_state "overdue" with that as_of, then
+  propose_action kind "settlement_offer" with that as_of.
+- Any other event: read_invoice and stop.
 
 # Rules
 1. Never state or estimate a date, rate or amount yourself. Call the skill that computes it.
@@ -205,6 +220,11 @@ DECLARATIONS = [
     *({"name": f"run_{e}", "description": f"Run the {e} engine.",
        "parameters": {"type": "object", "properties": {"inputs": _OBJ}, "required": ["inputs"]}}
       for e in ENGINES),
+    *({"name": r, "description": f"Model-read the event's own document: {r.replace('_', ' ')}.",
+       "parameters": {"type": "object", "properties": {}}} for r in READS),
+    {"name": "move_state", "description": "Ask the server to move the invoice to a state; guards decide.",
+     "parameters": {"type": "object", "properties": {"to": {"type": "string"}, "as_of": {"type": "string"}},
+                    "required": ["to"]}},
     {"name": "propose_action", "description": "Propose the next human action and stop.",
      "parameters": {"type": "object", "properties": {
          "kind": {"type": "string"}, "draft": _OBJ, "as_of": {"type": "string"},
@@ -234,8 +254,9 @@ class GeminiAgent(ScriptedAgent):
 
     runner = "gemini"
 
-    def __init__(self, http, token: str, model, model_name: str = "", max_calls: int = MAX_CALLS):
-        super().__init__(http, token)
+    def __init__(self, http, token: str, model, model_name: str = "", max_calls: int = MAX_CALLS,
+                 reader=None):
+        super().__init__(http, token, reader)
         self.model, self.model_name, self.max_calls = model, model_name, max_calls
         self.tokens_in = self.tokens_out = 0
         self.runs: list[dict] = []   # engine runs seen: {engine, rule_version, input_hash}
@@ -244,6 +265,11 @@ class GeminiAgent(ScriptedAgent):
     def tool(self, inv: str, name: str, a: dict) -> dict:
         if name == "read_invoice":
             return self.call("GET", f"/v1/invoices/{inv}", params={"as_of": a["as_of"]} if a.get("as_of") else {})
+        if name in READS:
+            return self.read_document(inv, name)
+        if name == "move_state":
+            return self.call("POST", f"/v1/invoices/{inv}/state",
+                             json={"to": a["to"], **({"as_of": a["as_of"]} if a.get("as_of") else {})})
         if name == "propose_action":
             draft = {**(a.get("draft") or {}), "cites": {"engine_runs": self.runs,
                                                          "document_ids": a.get("document_ids", [])}}
@@ -254,11 +280,39 @@ class GeminiAgent(ScriptedAgent):
         self.runs.append({k: out[k] for k in ("engine", "rule_version", "input_hash")})
         return out
 
+    def read_document(self, inv: str, name: str) -> dict:
+        """The four model-reading tools. They act on the event's own document only (the model names
+        no id) and return a summary; the server stores and re-checks what is written."""
+        p = self.event["payload"]
+        did, kind = p.get("document_id"), p.get("doc_type")
+        if not (self.reader and did and self.event["invoice_id"] == inv):
+            return {"error": "no document to read for this event"}
+        r = self.http.request("GET", f"/v1/documents/{did}/content", headers=self.headers)
+        if r.status_code != 200:
+            return {"error": f"document not readable: {r.status_code}"}
+        mime = "text/plain" if kind == "email" else r.headers.get("content-type", "application/pdf")
+        doc, facts = Document(r.content, mime), FactReader(self.reader.client)
+        if name == "classify_document":
+            return self.reader.classify(doc)
+        if name == "extract_fields":
+            if kind not in KINDS:
+                return {"error": f"{kind} is not an invoice, PO, GRN or challan"}
+            out = self.call("POST", f"/v1/documents/{did}/extraction", json=self.reader.read(doc))
+            return {"problems": out["review"], "mismatches": out["mismatches"]}
+        if name == "detect_objection":
+            if kind not in ("email", "debit_note"):
+                return {"error": f"{kind} is not an email or debit note"}
+            no = next(i for i in self.call("GET", "/v1/invoices") if i["id"] == inv)["invoice_no"]
+            return self.call("POST", f"/v1/documents/{did}/objection", json=facts.objection(doc, [no]))
+        if kind != "contract":
+            return {"error": f"{kind} is not a contract"}
+        return self.call("POST", f"/v1/documents/{did}/contract-terms", json=facts.contract_terms(doc))
+
     def review(self, inv: str, reason: str) -> None:
         self.tool(inv, "propose_action", {"kind": "review", "draft": {"reason": reason, "refused_tools": self.refused}})
 
     def handle(self, event: dict) -> None:
-        inv = event["invoice_id"]
+        inv, self.event = event["invoice_id"], event
         msgs = [{"role": "user", "text": json.dumps(event)}]
         while True:
             try:
@@ -290,16 +344,17 @@ class GeminiAgent(ScriptedAgent):
                     return self.review(inv, f"{name} needs a person: manual review, hard flag or low confidence")
 
 
-def gemini_model(api_key: str, name: str | None = None):
+def gemini_model(api_key: str, name: str | None = None, timeout: float = 60):
     """The real model for the loop: the ticket-17 client module owns the Gemini call."""
     from hermes.llm import gemini_tool_model
 
-    return gemini_tool_model(api_key, name, ModelLimit)
+    return gemini_tool_model(api_key, name, ModelLimit, timeout)
 
 
-def make_agent(http, token: str, reader=None):
-    """The runner is chosen by HERMES_AGENT_RUNNER; scripted (offline, no key) is the default."""
-    if os.environ.get("HERMES_AGENT_RUNNER", "scripted") != "gemini":
+def make_agent(http, token: str, reader=None, model=None):
+    """The runner is chosen by HERMES_AGENT_RUNNER (or by passing a loop `model`); scripted (offline,
+    no key) is the default."""
+    if model is None and os.environ.get("HERMES_AGENT_RUNNER", "scripted") != "gemini":
         return ScriptedAgent(http, token, reader)
-    m = gemini_model(os.environ["GEMINI_API_KEY"])
-    return GeminiAgent(http, token, m, m.name)
+    m = model or gemini_model(os.environ["GEMINI_API_KEY"])
+    return GeminiAgent(http, token, m, m.name, reader=reader)

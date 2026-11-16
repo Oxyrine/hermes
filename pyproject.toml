@@ -28,6 +28,8 @@ packages = ["src/hermes"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not live'"  # live-model runs are manual: `uv run pytest -m live`
+markers = ["live: calls the real Gemini API with the key in .env; manual, never in CI"]
 
 [tool.ruff]
 line-length = 100
