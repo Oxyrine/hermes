@@ -242,8 +242,16 @@ def run_injection(dsn: str, root: Path, manifest: dict, live: Live) -> dict:
     for sup in ("S1", "S2", "S3"):
         for src in ("documents", "email"):
             s.pull(sup, src)
-    shas = [f["sha256"] for f in manifest["files"] if f["path"] in manifest["injection_samples"]]
-    ids = [r[0] for r in s.conn.execute("SELECT id::text FROM document WHERE sha256 = ANY(%s)", (shas,))]
+    # Fixture-ingested PDFs carry no document_id, so the loop would skip them: upload the two PDF
+    # samples through the API, as a supplier would, so each raises a document event the loop reads.
+    h, ids = s.login(), []
+    for path in (x for x in manifest["injection_samples"] if x.endswith(".pdf")):
+        inv, kind = path.split("/")[1], path.split("/")[2][:-4]
+        r = s.client.post("/v1/documents", params={"filename": f"{kind}.pdf", "doc_type": kind,
+                                                   "invoice_id": s.invoice(inv)},
+                          content=(root / path).read_bytes(), headers=h | {"Content-Type": "application/pdf"})
+        assert r.status_code == 200, r.text
+        ids.append(r.json()["id"])
     s.keep_only(ids, "payload->>'document_id'")
     live.client.manifest_hashes = frozenset(live.hashes | s.hashes)
     start, before = len(live.loop.seen), live.stats()["api_calls"]
