@@ -4,7 +4,7 @@ version = "0.0.0"
 description = "Evidence, pricing and servicing layer between MSME suppliers and regulated lenders"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.162.7",
+    "fastapi>=0.165.0",
     "fpdf2>=2.9.0",
     "psycopg[binary]>=3.3.9",
     "pyjwt>=2.15.1",
